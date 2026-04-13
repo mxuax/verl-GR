@@ -1,4 +1,4 @@
-"""Thin OpenOneRec distillation integration bridge."""
+"""OpenOneRec distill adapter owned by recipe layer."""
 
 from __future__ import annotations
 
@@ -17,8 +17,6 @@ class OpenOneRecDistillPipeline:
     entrypoint: str = "OpenOneRec.verl_rl.recipe.distill.main_distill"
 
     def build_runtime_args(self, distill_input: DistillInput) -> dict[str, Any]:
-        """Build runtime arguments consumed by OpenOneRec distill entrypoint."""
-
         return {
             "student_model_path": str(distill_input.student_model_path),
             "teacher_model_path": str(distill_input.teacher_model_path),
@@ -34,8 +32,6 @@ class OpenOneRecDistillPipeline:
         }
 
     def run(self, distill_input: DistillInput, dry_run: bool = True) -> DistillOutput:
-        """Run distillation through OpenOneRec integration."""
-
         _ = self.build_runtime_args(distill_input)
         if not dry_run:
             raise NotImplementedError(

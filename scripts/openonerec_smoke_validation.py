@@ -14,8 +14,8 @@ from verl_gr.contracts.objective_schema import ObjectiveKind, RLRewardSchema, Re
 from verl_gr.contracts.sample_schema import RepresentationType
 from verl_gr.contracts.tokenizer_contract import TokenizedSample
 from verl_gr.recipes.recipe_registry import build_default_registry
+from verl_gr.recipes.openonerec.rl_pipeline import OpenOneRecRLPipeline
 from verl_gr.trainers.rl_trainer import RLTrainer
-from verl_gr.integrations.openonerec.rl_pipeline import OpenOneRecRLPipeline
 from verl_gr.contracts.rl_contract import RLInput
 
 
@@ -96,6 +96,9 @@ def validate_trainer_init_and_artifacts() -> None:
 
     trainer = RLTrainer(runtime_bridge=OpenOneRecRLPipeline())
     output = trainer.run(rl_input)
+    assert trainer.status == "completed"
+    assert trainer.run_count == 1
+    assert trainer.last_result is not None
     assert output.checkpoint.stage_name == "rl"
     assert output.metrics.get("status") == "initialized"
 

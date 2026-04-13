@@ -1,4 +1,4 @@
-"""Thin OpenOneRec RL integration bridge."""
+"""OpenOneRec RL adapter owned by recipe layer."""
 
 from __future__ import annotations
 
@@ -14,13 +14,11 @@ from verl_gr.integrations.verl.worker_factory import WorkerFactoryConfig, build_
 
 @dataclass
 class OpenOneRecRLPipeline:
-    """Translate RL contracts into verl runtime bridge arguments."""
+    """Translate RL contracts into backend bridge arguments."""
 
     runtime: VerlRLRuntime = field(default_factory=VerlRLRuntime)
 
     def build_runtime_args(self, rl_input: RLInput) -> dict[str, Any]:
-        """Build runtime argument payload from RL contract input."""
-
         first_metadata = rl_input.tokenized_samples[0].metadata if rl_input.tokenized_samples else {}
         return {
             "policy_model_path": str(rl_input.policy_model_path),
@@ -41,8 +39,6 @@ class OpenOneRecRLPipeline:
         }
 
     def _build_worker_config(self, rl_input: RLInput) -> WorkerFactoryConfig:
-        """Build worker strategy config including two-stage special routing."""
-
         first_metadata = rl_input.tokenized_samples[0].metadata if rl_input.tokenized_samples else {}
         rollout_name = "two_stage" if rl_input.reward_schema.constrained_decoding_aware else "vllm"
         use_reference_policy = (
@@ -60,8 +56,6 @@ class OpenOneRecRLPipeline:
         )
 
     def build_aux_artifact(self, rl_input: RLInput) -> RewardOrDecodingArtifact | None:
-        """Preserve reward/decoding side artifact in contract format."""
-
         decoding_path = None
         if rl_input.reward_schema.constrained_decoding_aware:
             decoding_path = Path("outputs/openonerec/decoding_policy.json")
@@ -75,8 +69,6 @@ class OpenOneRecRLPipeline:
         return rl_input.reward_or_decoding_artifact
 
     def run(self, rl_input: RLInput) -> RLOutput:
-        """Execute RL flow via runtime + worker factory thin bridges."""
-
         runtime_args = self.build_runtime_args(rl_input)
         worker_routing = build_worker_routing(self._build_worker_config(rl_input))
 

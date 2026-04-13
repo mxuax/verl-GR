@@ -1,4 +1,4 @@
-"""Thin OpenOneRec SFT integration bridge."""
+"""OpenOneRec SFT adapter owned by recipe layer."""
 
 from __future__ import annotations
 
@@ -17,8 +17,6 @@ class OpenOneRecSFTPipeline:
     entrypoint: str = "OpenOneRec.verl_rl.recipe.sft.main_sft"
 
     def build_runtime_args(self, sft_input: SFTInput) -> dict[str, Any]:
-        """Build runtime arguments consumed by OpenOneRec SFT entrypoint."""
-
         return {
             "model_path": str(sft_input.model_path),
             "tokenizer_root": str(sft_input.tokenizer_artifact.tokenizer_root),
@@ -33,8 +31,6 @@ class OpenOneRecSFTPipeline:
         }
 
     def run(self, sft_input: SFTInput, dry_run: bool = True) -> SFTOutput:
-        """Run SFT through OpenOneRec integration."""
-
         _ = self.build_runtime_args(sft_input)
         if not dry_run:
             raise NotImplementedError(

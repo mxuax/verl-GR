@@ -1,10 +1,6 @@
 """Integration boundary for runtime bridges added in later phases."""
 
-from verl_gr.integrations.openonerec import (
-    OpenOneRecDistillPipeline,
-    OpenOneRecRLPipeline,
-    OpenOneRecSFTPipeline,
-)
+from verl_gr.integrations.runtime_adapter import TaskRuntime
 from verl_gr.integrations.verl import (
     RLRuntimeConfig,
     RuntimeTrainerHandle,
@@ -16,9 +12,7 @@ from verl_gr.integrations.verl import (
 )
 
 __all__ = [
-    "OpenOneRecSFTPipeline",
-    "OpenOneRecDistillPipeline",
-    "OpenOneRecRLPipeline",
+    "TaskRuntime",
     "RLRuntimeConfig",
     "RuntimeTrainerHandle",
     "VerlRLRuntime",

@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 
 from verl_gr.contracts.sample_schema import RepresentationType, TaskType
 from verl_gr.contracts.task_composition import StageName, TaskComposition
-from verl_gr.integrations.openonerec.distill_pipeline import OpenOneRecDistillPipeline
-from verl_gr.integrations.openonerec.rl_pipeline import OpenOneRecRLPipeline
-from verl_gr.integrations.openonerec.sft_pipeline import OpenOneRecSFTPipeline
+from verl_gr.recipes.openonerec.distill_pipeline import OpenOneRecDistillPipeline
+from verl_gr.recipes.openonerec.rl_pipeline import OpenOneRecRLPipeline
+from verl_gr.recipes.openonerec.sft_pipeline import OpenOneRecSFTPipeline
 from verl_gr.recipes.recipe_registry import RecipeSpec
 
 

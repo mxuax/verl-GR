@@ -8,12 +8,12 @@ entrypoints to the `verl_gr` recipe + integration bridge layout.
 - old `recipe.onerec.main_onerec_ppo` -> new `verl_gr.recipes.openonerec_recipe.OpenOneRecRecipe`
 - old `recipe.onerec.onerec_ray_trainer` -> new `verl_gr.integrations.verl.rl_runtime.VerlRLRuntime`
 - old `recipe.onerec.onerec_fsdp_workers` -> new `verl_gr.integrations.verl.worker_factory.build_worker_routing`
-- old `recipe.onerec.onerec_vllm_rollout` -> new `verl_gr.integrations.openonerec.rl_pipeline.OpenOneRecRLPipeline`
+- old `recipe.onerec.onerec_vllm_rollout` -> new `verl_gr.recipes.openonerec.rl_pipeline.OpenOneRecRLPipeline`
 
 ## Stage Ownership (Boundary-Preserving)
 
 - `recipe`: stage composition + adapter selection only
-- `integrations/openonerec`: contract translation + OpenOneRec adapter entrypoint metadata
+- `recipes/openonerec`: task-specific contract translation + OpenOneRec adapter entrypoint metadata
 - `integrations/verl`: runtime lifecycle + role-to-worker routing
 - `trainers/rl_trainer`: invokes runtime bridge, does not embed framework internals
 
