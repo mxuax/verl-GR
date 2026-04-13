@@ -48,6 +48,22 @@ class TokenizerSpec:
     optional_sample_fields: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ChatMessage:
+    """Normalized chat message used across tokenizer/RL handoff."""
+
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class PromptPackage:
+    """Prompt payload plus reward annotation extracted from chat input."""
+
+    prompt_messages: tuple[ChatMessage, ...]
+    reward_payload: Mapping[str, Any]
+
+
 class TokenizerContract(Protocol):
     """Interface that every framework tokenizer implementation must satisfy."""
 

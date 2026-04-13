@@ -8,8 +8,15 @@ from typing import Any
 
 from verl_gr.contracts.artifact_contract import RewardOrDecodingArtifact
 from verl_gr.contracts.rl_contract import RLInput, RLOutput
+from verl_gr.contracts.task_composition import StageName, StageRuntimeSpec
 from verl_gr.integrations.verl.rl_runtime import RLRuntimeConfig, VerlRLRuntime
 from verl_gr.integrations.verl.worker_factory import WorkerFactoryConfig, build_worker_routing
+
+OPENONEREC_RL_RUNTIME = StageRuntimeSpec(
+    stage=StageName.RL,
+    entrypoint_module="verl_gr.recipes.openonerec.main_onerec_ppo",
+    config_name="grpo_trainer",
+)
 
 
 @dataclass
@@ -74,7 +81,7 @@ class OpenOneRecRLPipeline:
 
         checkpoint_root = Path(runtime_args.get("task_config_path", "outputs/openonerec")) / "rl_checkpoints"
         self.runtime.runtime_config = RLRuntimeConfig(
-            trainer_entrypoint="verl_gr.recipes.openonerec.main_onerec_ppo",
+            trainer_entrypoint=OPENONEREC_RL_RUNTIME.entrypoint_module,
             ray_runtime_env="ppo_default",
             checkpoint_root=checkpoint_root,
             dry_run=True,

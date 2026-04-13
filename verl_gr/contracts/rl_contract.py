@@ -39,3 +39,23 @@ class RLContract(Protocol):
     def run(self, rl_input: RLInput) -> RLOutput:
         """Run the RL stage and return a checkpoint plus metrics."""
 
+
+@dataclass(frozen=True)
+class RLWorkloadProfile:
+    """Execution profile resolved from trainer config for RL workload wiring."""
+
+    actor_strategy: str
+    rollout_name: str
+    rollout_mode: str
+    use_legacy_worker_impl: str = "auto"
+
+    def requires_onerec_actor_worker(self) -> bool:
+        """Whether OneRec-specific actor/rollout worker should be used."""
+
+        return (
+            self.use_legacy_worker_impl != "disable"
+            and self.rollout_name == "two_stage"
+            and self.actor_strategy in {"fsdp", "fsdp2"}
+            and self.rollout_mode != "async"
+        )
+

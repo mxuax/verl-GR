@@ -13,6 +13,8 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
+from verl_gr.contracts.tokenizer_contract import ChatMessage, PromptPackage
+
 logger = logging.getLogger(__name__)
 
 
@@ -143,8 +145,21 @@ class OneRecDataset(Dataset):
                     message["content"] = f"{message['content']}/no_think"
 
         ground_truth_message = clean_chats[-1]["content"]
-        row[self.prompt_key] = prompt_messages
-        row["reward_model"] = {"ground_truth": ground_truth_message, "style": "rule"}
+        prompt_package = PromptPackage(
+            prompt_messages=tuple(
+                ChatMessage(
+                    role=str(message.get("role", "")),
+                    content=str(message.get("content", "")),
+                )
+                for message in prompt_messages
+            ),
+            reward_payload={"ground_truth": ground_truth_message, "style": "rule"},
+        )
+        row[self.prompt_key] = [
+            {"role": message.role, "content": message.content}
+            for message in prompt_package.prompt_messages
+        ]
+        row["reward_model"] = dict(prompt_package.reward_payload)
         return row
 
     def resume_dataset_state(self) -> None:

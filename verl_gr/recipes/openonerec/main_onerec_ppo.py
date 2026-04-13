@@ -5,6 +5,8 @@ from __future__ import annotations
 from importlib import import_module
 from pathlib import Path
 
+from verl_gr.contracts.rl_contract import RLWorkloadProfile
+
 _CONFIG_ROOT = Path(__file__).resolve().parents[3] / "configs" / "verl_gr" / "openonerec"
 
 
@@ -23,12 +25,13 @@ def _build_main():
         """TaskRunner override that routes two-stage rollout to OneRec worker."""
 
         def add_actor_rollout_worker(self, config):
-            use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
-            if (
-                use_legacy_worker_impl != "disable"
-                and config.actor_rollout_ref.rollout.name == "two_stage"
-                and config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}
-            ):
+            workload_profile = RLWorkloadProfile(
+                actor_strategy=str(config.actor_rollout_ref.actor.strategy),
+                rollout_name=str(config.actor_rollout_ref.rollout.name),
+                rollout_mode=str(config.actor_rollout_ref.rollout.mode),
+                use_legacy_worker_impl=str(config.trainer.get("use_legacy_worker_impl", "auto")),
+            )
+            if workload_profile.requires_onerec_actor_worker():
                 RayWorkerGroup = getattr(import_module("verl.single_controller.ray"), "RayWorkerGroup")
                 Role = getattr(import_module("verl.trainer.ppo.ray_trainer"), "Role")
                 actor_rollout_cls = OneRecActorRolloutRefWorker
