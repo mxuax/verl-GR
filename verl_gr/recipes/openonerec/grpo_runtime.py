@@ -22,12 +22,9 @@ class OpenOneRecGRPORuntime(TaskRuntime):
         ray_runtime: RayPPOTrainerRuntime | None = None,
     ) -> None:
         self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[3]
-        self.openonerec_root = (
-            Path(openonerec_root)
-            if openonerec_root
-            else (self.project_root.parent / "OpenOneRec")
-        )
+        self.openonerec_root = Path(openonerec_root) if openonerec_root else (self.project_root.parent / "OpenOneRec")
         self.openonerec_verl_rl = self.openonerec_root / "verl_rl"
+        self.local_recipe_root = self.project_root / "verl_gr" / "recipes" / "openonerec"
         self.ray_runtime = ray_runtime or RayPPOTrainerRuntime()
         self.last_overrides: list[str] = []
         self.last_command: list[str] = []
@@ -35,7 +32,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
 
     def _build_overrides(self, env: Mapping[str, str], n_nodes: int, n_gpus: int) -> list[str]:
         train_batch_size = int(env.get("TRAIN_BATCH_SIZE", str(n_nodes * n_gpus)))
-        onerec_recipe_path = self.openonerec_verl_rl / "recipe/onerec/onerec_recipe.py"
+        onerec_recipe_path = self.local_recipe_root / "onerec_recipe.py"
         return [
             "algorithm.adv_estimator=grpo",
             f"data.train_files={env.get('TRAIN_FILES', '[]')}",
@@ -120,8 +117,8 @@ class OpenOneRecGRPORuntime(TaskRuntime):
         extra_overrides: Sequence[str] | None = None,
     ) -> subprocess.CompletedProcess[str] | None:
         self.status = "running"
-        if not self.openonerec_verl_rl.exists():
-            raise FileNotFoundError(f"OpenOneRec runtime not found at {self.openonerec_verl_rl}")
+        if not self.local_recipe_root.exists():
+            raise FileNotFoundError(f"Local OpenOneRec recipe runtime not found at {self.local_recipe_root}")
 
         n_nodes, n_gpus = self.ray_runtime.detect_cluster()
         overrides = self._build_overrides(env, n_nodes=n_nodes, n_gpus=n_gpus)
@@ -130,11 +127,11 @@ class OpenOneRecGRPORuntime(TaskRuntime):
         self.last_overrides = overrides
 
         runtime_env = dict(env)
-        runtime_env["PYTHONPATH"] = f"{self.openonerec_verl_rl}{os.pathsep}{runtime_env.get('PYTHONPATH', '')}"
+        runtime_env["PYTHONPATH"] = f"{self.project_root}{os.pathsep}{runtime_env.get('PYTHONPATH', '')}"
         completed = self.ray_runtime.run_entrypoint(
-            entrypoint_module="recipe.onerec.main_onerec_ppo",
+            entrypoint_module="verl_gr.recipes.openonerec.main_onerec_ppo",
             overrides=overrides,
-            cwd=self.openonerec_verl_rl,
+            cwd=self.project_root,
             env=runtime_env,
         )
         self.last_command = list(self.ray_runtime.last_command)

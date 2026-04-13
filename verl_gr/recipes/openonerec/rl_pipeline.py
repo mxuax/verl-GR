@@ -74,7 +74,7 @@ class OpenOneRecRLPipeline:
 
         checkpoint_root = Path(runtime_args.get("task_config_path", "outputs/openonerec")) / "rl_checkpoints"
         self.runtime.runtime_config = RLRuntimeConfig(
-            trainer_entrypoint="OpenOneRec.verl_rl.recipe.onerec.main_onerec_ppo",
+            trainer_entrypoint="verl_gr.recipes.openonerec.main_onerec_ppo",
             ray_runtime_env="ppo_default",
             checkpoint_root=checkpoint_root,
             dry_run=True,

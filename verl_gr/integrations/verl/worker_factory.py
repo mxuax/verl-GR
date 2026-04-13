@@ -43,7 +43,7 @@ def build_worker_routing(config: WorkerFactoryConfig) -> WorkerRouting:
     if config.actor_strategy not in {"fsdp", "fsdp2"}:
         actor_worker = "verl.workers.megatron_workers.ActorRolloutRefWorker"
     if config.rollout_name == "two_stage":
-        actor_worker = "OpenOneRec.recipe.onerec.onerec_fsdp_workers.OneRecActorRolloutRefWorker"
+        actor_worker = "verl_gr.recipes.openonerec.onerec_fsdp_workers.OneRecActorRolloutRefWorker"
     if config.rollout_mode == "async":
         actor_worker = "verl.workers.fsdp_workers.AsyncActorRolloutRefWorker"
 

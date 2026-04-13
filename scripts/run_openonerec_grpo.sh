@@ -7,11 +7,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERL_GR_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${VERL_GR_ROOT}/.." && pwd)"
+
+# openonerec data paths only, not for code importing
 OPENONEREC_ROOT="${OPENONEREC_ROOT:-${PROJECT_ROOT}/OpenOneRec}"
 OPENONEREC_VERL_RL="${OPENONEREC_ROOT}/verl_rl"
+LOCAL_OPENONEREC_RECIPE_ROOT="${VERL_GR_ROOT}/verl_gr/recipes/openonerec"
 
-if [[ ! -d "${OPENONEREC_VERL_RL}" ]]; then
-  echo "OpenOneRec verl_rl root not found: ${OPENONEREC_VERL_RL}" >&2
+if [[ ! -d "${LOCAL_OPENONEREC_RECIPE_ROOT}" ]]; then
+  echo "Local OpenOneRec recipe root not found: ${LOCAL_OPENONEREC_RECIPE_ROOT}" >&2
   exit 1
 fi
 
@@ -61,23 +64,30 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 
 mkdir -p "${VERL_GR_ROOT}/logs" "${OUTPUT_DIR}"
 
-export PYTHONPATH="${OPENONEREC_VERL_RL}:${PYTHONPATH:-}"
+export PYTHONPATH="${VERL_GR_ROOT}:${PYTHONPATH:-}"
 export VLLM_ATTENTION_BACKEND
 export WANDB_MODE
 
 echo "==================================="
 echo "OpenOneRec GRPO (verl-GR runtime)"
 echo "==================================="
-echo "OpenOneRec root: ${OPENONEREC_ROOT}"
+echo "OpenOneRec data root: ${OPENONEREC_ROOT}"
 echo "Cluster: ${N_NODES} node(s) x ${N_GPUS} GPU(s)"
 echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
 echo "Output: ${OUTPUT_DIR}"
 echo "==================================="
 
-cd "${OPENONEREC_VERL_RL}"
+# Guardrail: block accidental fallback to legacy OpenOneRec recipe imports.
+for arg in "$@"; do
+  if [[ "$arg" == *"recipe/onerec"* || "$arg" == *"recipe.onerec"* ]]; then
+    echo "Error: legacy OpenOneRec recipe reference detected in argument: $arg" >&2
+    echo "Use verl_gr.recipes.openonerec.* modules only." >&2
+    exit 2
+  fi
+done
 
-"${PYTHON_BIN}" -u -m recipe.onerec.main_onerec_ppo \
+"${PYTHON_BIN}" -u -m verl_gr.recipes.openonerec.main_onerec_ppo \
   algorithm.adv_estimator=grpo \
   data.train_files="${TRAIN_FILES}" \
   data.val_files="${VAL_FILES}" \
@@ -91,7 +101,7 @@ cd "${OPENONEREC_VERL_RL}"
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.filter_overlong_prompts=True \
   data.truncation=error \
-  data.custom_cls.path="${OPENONEREC_VERL_RL}/recipe/onerec/onerec_recipe.py" \
+  data.custom_cls.path="${LOCAL_OPENONEREC_RECIPE_ROOT}/onerec_recipe.py" \
   data.custom_cls.name=OneRecDataset \
   data.reward_fn_key=source \
   ++data.data_source_key=source \
@@ -102,7 +112,7 @@ cd "${OPENONEREC_VERL_RL}"
   actor_rollout_ref.actor.clip_ratio_high=0.28 \
   actor_rollout_ref.model.enable_activation_offload=True \
   actor_rollout_ref.model.use_remove_padding=True \
-  custom_reward_function.path="${OPENONEREC_VERL_RL}/recipe/onerec/onerec_recipe.py" \
+  custom_reward_function.path="${LOCAL_OPENONEREC_RECIPE_ROOT}/onerec_recipe.py" \
   custom_reward_function.name=compute_score \
   actor_rollout_ref.actor.use_dynamic_bsz="${USE_DYNAMIC_BSZ}" \
   actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
