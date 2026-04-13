@@ -5,7 +5,7 @@ entrypoints to the `verl_gr` recipe + integration bridge layout.
 
 ## Entrypoint Mapping
 
-- old `recipe.onerec.main_onerec_ppo` -> new `verl_gr.recipes.openonerec_recipe.OpenOneRecRecipe`
+- old `recipe.onerec.main_onerec_ppo` -> new `verl_gr.recipes.openonerec.recipe.OpenOneRecRecipe`
 - old `recipe.onerec.onerec_ray_trainer` -> new `verl_gr.integrations.verl.rl_runtime.VerlRLRuntime`
 - old `recipe.onerec.onerec_fsdp_workers` -> new `verl_gr.integrations.verl.worker_factory.build_worker_routing`
 - old `recipe.onerec.onerec_vllm_rollout` -> new `verl_gr.recipes.openonerec.rl_pipeline.OpenOneRecRLPipeline`

@@ -1,34 +1,45 @@
-"""Local OpenOneRec GRPO entrypoint.
-
-This module is intentionally hosted in verl-GR so launchers do not import recipe
-code from the external OpenOneRec package path.
-"""
+"""Local OpenOneRec GRPO entrypoint with OneRec TaskRunner behavior."""
 
 from __future__ import annotations
 
 from importlib import import_module
 from pathlib import Path
 
-_CONFIG_ROOT = (
-    Path(__file__).resolve().parents[3] / "configs" / "verl_gr" / "openonerec"
-)
+_CONFIG_ROOT = Path(__file__).resolve().parents[3] / "configs" / "verl_gr" / "openonerec"
 
 
 def _build_main():
     hydra = import_module("hydra")
     ray = import_module("ray")
-    constants = import_module("verl.trainer.constants_ppo")
     trainer_main = import_module("verl.trainer.main_ppo")
-    get_ppo_ray_runtime_env = getattr(constants, "get_ppo_ray_runtime_env")
+    BaseTaskRunner = getattr(trainer_main, "TaskRunner")
     run_verl_ppo = getattr(trainer_main, "run_ppo")
+    OneRecActorRolloutRefWorker = getattr(
+        import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+        "OneRecActorRolloutRefWorker",
+    )
+
+    class OneRecTaskRunner(BaseTaskRunner):
+        """TaskRunner override that routes two-stage rollout to OneRec worker."""
+
+        def add_actor_rollout_worker(self, config):
+            use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
+            if (
+                use_legacy_worker_impl != "disable"
+                and config.actor_rollout_ref.rollout.name == "two_stage"
+                and config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}
+            ):
+                RayWorkerGroup = getattr(import_module("verl.single_controller.ray"), "RayWorkerGroup")
+                Role = getattr(import_module("verl.trainer.ppo.ray_trainer"), "Role")
+                actor_rollout_cls = OneRecActorRolloutRefWorker
+                self.role_worker_mapping[Role.ActorRollout] = ray.remote(actor_rollout_cls)
+                self.mapping[Role.ActorRollout] = "global_pool"
+                return actor_rollout_cls, RayWorkerGroup
+            return super().add_actor_rollout_worker(config)
 
     def run_ppo(config) -> None:
-        if not ray.is_initialized():
-            ray.init(
-                runtime_env=get_ppo_ray_runtime_env(),
-                num_cpus=config.ray_init.num_cpus,
-            )
-        run_verl_ppo(config)
+        task_runner_class = ray.remote(num_cpus=1)(OneRecTaskRunner)
+        run_verl_ppo(config, task_runner_class=task_runner_class)
 
     @hydra.main(config_path=str(_CONFIG_ROOT), config_name="grpo_trainer", version_base=None)
     def hydra_entry(config):

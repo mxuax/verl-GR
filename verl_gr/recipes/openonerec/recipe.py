@@ -1,4 +1,4 @@
-"""OpenOneRec recipe wiring for verl-GR."""
+"""OpenOneRec task-level recipe wiring."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from verl_gr.contracts.task_composition import StageName, TaskComposition
 from verl_gr.recipes.openonerec.distill_pipeline import OpenOneRecDistillPipeline
 from verl_gr.recipes.openonerec.rl_pipeline import OpenOneRecRLPipeline
 from verl_gr.recipes.openonerec.sft_pipeline import OpenOneRecSFTPipeline
-from verl_gr.recipes.recipe_registry import RecipeSpec
 
 
 @dataclass
@@ -22,8 +21,6 @@ class OpenOneRecRecipe:
 
     @property
     def composition(self) -> TaskComposition:
-        """Return canonical OpenOneRec stage composition."""
-
         return TaskComposition(
             task_type=TaskType.OPENONEREC,
             representation_type=RepresentationType.SID,
@@ -37,8 +34,6 @@ class OpenOneRecRecipe:
         )
 
     def select_pipeline(self, stage: StageName) -> object:
-        """Return the integration adapter for one stage."""
-
         if stage == StageName.SFT:
             return self.sft_pipeline
         if stage == StageName.DISTILL:
@@ -46,15 +41,4 @@ class OpenOneRecRecipe:
         if stage == StageName.RL:
             return self.rl_pipeline
         raise ValueError(f"Unsupported stage for OpenOneRec integration: {stage.value}")
-
-
-def create_openonerec_recipe_spec() -> RecipeSpec:
-    """Create registry spec for the OpenOneRec recipe."""
-
-    recipe = OpenOneRecRecipe()
-    return RecipeSpec(
-        name="openonerec",
-        composition=recipe.composition,
-        factory=OpenOneRecRecipe,
-    )
 

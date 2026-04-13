@@ -13,7 +13,7 @@ from verl_gr.contracts.artifact_contract import (
 from verl_gr.contracts.objective_schema import ObjectiveKind, RLRewardSchema, RewardComponent
 from verl_gr.contracts.sample_schema import RepresentationType
 from verl_gr.contracts.tokenizer_contract import TokenizedSample
-from verl_gr.recipes.recipe_registry import build_default_registry
+from verl_gr.recipes.openonerec.recipe import OpenOneRecRecipe
 from verl_gr.recipes.openonerec.rl_pipeline import OpenOneRecRLPipeline
 from verl_gr.trainers.rl_trainer import RLTrainer
 from verl_gr.contracts.rl_contract import RLInput
@@ -33,11 +33,12 @@ def _assert_contains(path: Path, needle: str) -> None:
 
 
 def validate_recipe_registration() -> None:
-    registry = build_default_registry()
-    spec = registry.get("openonerec")
-    assert spec.composition.task_type.value == "openonerec"
-    assert spec.composition.representation_type.value == "sid"
-    assert tuple(stage.value for stage in spec.composition.stages) == (
+    recipe = OpenOneRecRecipe()
+    composition = recipe.composition
+    composition.validate()
+    assert composition.task_type.value == "openonerec"
+    assert composition.representation_type.value == "sid"
+    assert tuple(stage.value for stage in composition.stages) == (
         "tokenizer",
         "sft",
         "distill",

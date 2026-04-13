@@ -44,18 +44,3 @@ class RecipeRegistry:
 
         return tuple(sorted(self._recipes))
 
-
-def register_builtin_recipes(registry: RecipeRegistry) -> RecipeRegistry:
-    """Register built-in recipes in a registry instance."""
-
-    from verl_gr.recipes.openonerec_recipe import create_openonerec_recipe_spec
-
-    registry.register(create_openonerec_recipe_spec())
-    return registry
-
-
-def build_default_registry() -> RecipeRegistry:
-    """Return a registry preloaded with built-in recipes."""
-
-    return register_builtin_recipes(RecipeRegistry())
-
