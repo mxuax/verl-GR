@@ -67,6 +67,7 @@ def _build_main():
         """TaskRunner override that routes two-stage rollout to OneRec worker."""
 
         def add_actor_rollout_worker(self, config):
+            _sanitize_fsdp2_wrap_policy(config)
             workload_profile = RLWorkloadProfile(
                 actor_strategy=str(config.actor_rollout_ref.actor.strategy),
                 rollout_name=str(config.actor_rollout_ref.rollout.name),

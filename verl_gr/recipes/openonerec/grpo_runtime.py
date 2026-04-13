@@ -101,6 +101,8 @@ class OpenOneRecGRPORuntime(TaskRuntime):
             "actor_rollout_ref.ref.strategy=fsdp2",
             "actor_rollout_ref.actor.strategy=fsdp2",
             "++critic.enable=False",
+            "++actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[Qwen3DecoderLayer]",
+            "++actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[Qwen3DecoderLayer]",
             "++actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16",
             "++actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16",
         ]

@@ -85,6 +85,11 @@ for arg in "$@"; do
     echo "Use verl_gr.recipes.openonerec.* modules only." >&2
     exit 2
   fi
+  if [[ "$arg" == *"transformer_layer_cls_to_wrap={"* ]]; then
+    echo "Error: invalid set-style transformer_layer_cls_to_wrap detected: $arg" >&2
+    echo "Use list style [...], e.g. [Qwen3DecoderLayer]." >&2
+    exit 2
+  fi
 done
 
 "${PYTHON_BIN}" -u -m verl_gr.recipes.openonerec.main_onerec_ppo \
@@ -158,6 +163,8 @@ done
   actor_rollout_ref.ref.strategy=fsdp2 \
   actor_rollout_ref.actor.strategy=fsdp2 \
   ++critic.enable=False \
+  ++actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[Qwen3DecoderLayer] \
+  ++actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[Qwen3DecoderLayer] \
   ++actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
   ++actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16 \
   "$@"
