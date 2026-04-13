@@ -1,0 +1,49 @@
+task:
+  name: openonerec
+  representation_type: sid
+  stages:
+    - tokenizer
+    - sft
+    - distill
+    - rl
+    - eval
+
+models:
+  policy_model_path: "${paths.models_root}/policy"
+  reference_model_path: "${paths.models_root}/reference"
+  student_model_path: "${paths.models_root}/student"
+  teacher_model_path: "${paths.models_root}/teacher"
+
+data:
+  train_parquet: "${paths.data_root}/train.parquet"
+  val_parquet: "${paths.data_root}/val.parquet"
+
+rollout:
+  n: 4
+  name: two_stage
+  mode: sync
+  stage1_max_tokens: 1024
+  stage2_beam_size: 32
+  stage2_num_tokens: 16
+  return_all_beams: true
+  grpo_group_key: uid
+
+algorithm:
+  kl_mode: adaptive_kl
+  use_kl_in_reward: true
+  constrained_decoding_aware: true
+
+workers:
+  actor_strategy: fsdp
+  critic_enabled: true
+  reward_model_enabled: false
+  use_reference_policy: true
+  resource_pool_id: global_pool
+
+artifacts:
+  tokenizer_root: "${paths.artifacts_root}/tokenizer"
+  output_root: "${paths.output_root}"
+  checkpoint_root: "${paths.output_root}/checkpoints"
+  reward_schema_path: "${paths.artifacts_root}/reward_schema.json"
+  decoding_policy_path: "${paths.artifacts_root}/decoding_policy.json"
+

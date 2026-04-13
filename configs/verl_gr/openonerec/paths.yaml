@@ -1,0 +1,13 @@
+paths:
+  project_root: "."
+  configs_root: "${paths.project_root}/configs/verl_gr/openonerec"
+  models_root: "${paths.project_root}/models/openonerec"
+  data_root: "${paths.project_root}/data/openonerec"
+  artifacts_root: "${paths.project_root}/artifacts/openonerec"
+  output_root: "${paths.project_root}/outputs/openonerec"
+
+stage_config_artifact:
+  task_config_path: "${paths.configs_root}/base.yaml"
+  stage_config_path: "${paths.configs_root}/paths.yaml"
+  objective_config_path: "${paths.configs_root}/base.yaml"
+

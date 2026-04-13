@@ -14,6 +14,7 @@ class RLTrainer:
 
     name: str = "rl_trainer"
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    runtime_bridge: Any | None = None
 
     def validate_input(self, rl_input: RLInput) -> None:
         """Validate the minimal RL input contract."""
@@ -29,5 +30,7 @@ class RLTrainer:
         """
 
         self.validate_input(rl_input)
+        if self.runtime_bridge is not None and hasattr(self.runtime_bridge, "run"):
+            return self.runtime_bridge.run(rl_input)
         raise NotImplementedError("RLTrainer.run is intentionally deferred to later phases.")
 
