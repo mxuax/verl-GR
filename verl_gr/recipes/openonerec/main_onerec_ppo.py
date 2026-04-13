@@ -10,7 +10,7 @@ from importlib import import_module
 from pathlib import Path
 
 _CONFIG_ROOT = (
-    Path(__file__).resolve().parents[4] / "OpenOneRec" / "verl_rl" / "verl" / "trainer" / "config"
+    Path(__file__).resolve().parents[3] / "configs" / "verl_gr" / "openonerec"
 )
 
 
@@ -30,7 +30,7 @@ def _build_main():
             )
         run_verl_ppo(config)
 
-    @hydra.main(config_path=str(_CONFIG_ROOT), config_name="ppo_trainer", version_base=None)
+    @hydra.main(config_path=str(_CONFIG_ROOT), config_name="grpo_trainer", version_base=None)
     def hydra_entry(config):
         run_ppo(config)
 
