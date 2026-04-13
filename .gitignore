@@ -43,6 +43,7 @@ env/
 *.log
 logs/
 tmp_ray/
+outputs/
 
 # Jupyter
 .ipynb_checkpoints/

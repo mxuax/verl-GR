@@ -1,3 +1,88 @@
+# Local GRPO config aligned to verl release v0.7.1 composition.
+# Keep defaults-based structure so actor/ref sections carry _target_.
+
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+
+defaults:
+  - model_engine: dp
+  - actor@actor_rollout_ref.actor: ${model_engine}_actor
+  - data@data: legacy_data
+  - ref@actor_rollout_ref.ref: ${model_engine}_ref
+  - rollout@actor_rollout_ref.rollout: rollout
+  - model@actor_rollout_ref.model: hf_model
+  - critic@critic: ${model_engine}_critic
+  - legacy_reward_impl
+  - reward@reward: reward
+  - algorithm@algorithm.rollout_correction: rollout_correction
+  - _self_
+
+actor_rollout_ref:
+  hybrid_engine: true
+  nccl_timeout: 600
+  rollout:
+    layered_summon: false
+
+algorithm:
+  _target_: verl.trainer.config.AlgoConfig
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: gae
+  norm_adv_by_std_in_grpo: true
+  use_kl_in_reward: false
+  kl_penalty: kl
+  kl_ctrl:
+    _target_: verl.trainer.config.KLControlConfig
+    type: fixed
+    kl_coef: 0.001
+    horizon: 10000
+    target_kl: 0.1
+  use_pf_ppo: false
+  pf_ppo:
+    reweight_method: pow
+    weight_pow: 2.0
+
+trainer:
+  balance_batch: true
+  total_epochs: 30
+  total_training_steps: null
+  project_name: verl_examples
+  experiment_name: gsm8k
+  logger: [console, wandb]
+  log_val_generations: 0
+  rollout_data_dir: null
+  validation_data_dir: null
+  nnodes: 1
+  n_gpus_per_node: 8
+  save_freq: -1
+  esi_redundant_time: 0
+  resume_mode: auto
+  resume_from_path: null
+  val_before_train: true
+  val_only: false
+  test_freq: -1
+  critic_warmup: 0
+  default_hdfs_dir: null
+  del_local_ckpt_after_load: false
+  default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  max_actor_ckpt_to_keep: null
+  max_critic_ckpt_to_keep: null
+  ray_wait_register_center_timeout: 300
+  device: cuda
+  use_legacy_worker_impl: auto
+
+global_profiler:
+  _target_: verl.utils.profiler.ProfilerConfig
+  tool: null
+  steps: null
+  profile_continuous_steps: false
+  save_path: outputs/profile
+
+ray_init:
+  num_cpus: null
+  timeline_json_file: null
+
 # Local GRPO trainer config for verl-GR OpenOneRec runtime.
 # Adapted from OpenOneRec generated PPO trainer defaults.
 
@@ -153,7 +238,7 @@ actor_rollout_ref:
       impl_backend: torch
     trust_remote_code: false
   profiler:
-    _target_: verl.utils.profiler.ProfilerConfig
+    _target_: ${oc.select:global_profiler.tool,null}
     discrete: false
     all_ranks: false
     ranks: []
@@ -300,41 +385,42 @@ critic:
   ulysses_sequence_parallel_size: 1
   grad_clip: 1.0
 
-reward_model:
-  enable: false
-  strategy: fsdp
-  model:
-    input_tokenizer: ${actor_rollout_ref.model.path}
-    path: ~/models/FsfairX-LLaMA3-RM-v0.1
-    external_lib: ${actor_rollout_ref.model.external_lib}
-    trust_remote_code: false
-    use_shm: false
-    use_remove_padding: false
-    use_fused_kernels: ${actor_rollout_ref.model.use_fused_kernels}
-    fsdp_config:
-      wrap_policy:
-        min_num_params: 0
-      param_offload: false
-      reshard_after_forward: true
-      fsdp_size: -1
-      forward_prefetch: false
-  micro_batch_size: null
-  micro_batch_size_per_gpu: null
-  max_length: null
-  use_dynamic_bsz: ${critic.use_dynamic_bsz}
-  forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
-  reward_manager: naive
-  launch_reward_fn_async: false
-  sandbox_fusion:
-    url: null
-    max_concurrent: 64
-    memory_limit_mb: 1024
-  profiler:
-    _target_: verl.utils.profiler.ProfilerConfig
-    discrete: false
-    all_ranks: false
-    ranks: []
-  ulysses_sequence_parallel_size: 1
+reward:
+  reward_model:
+    enable: false
+    strategy: fsdp
+    model:
+      input_tokenizer: ${actor_rollout_ref.model.path}
+      path: ~/models/FsfairX-LLaMA3-RM-v0.1
+      external_lib: ${actor_rollout_ref.model.external_lib}
+      trust_remote_code: false
+      use_shm: false
+      use_remove_padding: false
+      use_fused_kernels: ${actor_rollout_ref.model.use_fused_kernels}
+      fsdp_config:
+        wrap_policy:
+          min_num_params: 0
+        param_offload: false
+        reshard_after_forward: true
+        fsdp_size: -1
+        forward_prefetch: false
+    micro_batch_size: null
+    micro_batch_size_per_gpu: null
+    max_length: null
+    use_dynamic_bsz: ${critic.use_dynamic_bsz}
+    forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
+    reward_manager: naive
+    launch_reward_fn_async: false
+    sandbox_fusion:
+      url: null
+      max_concurrent: 64
+      memory_limit_mb: 1024
+    profiler:
+      _target_: verl.utils.profiler.ProfilerConfig
+      discrete: false
+      all_ranks: false
+      ranks: []
+    ulysses_sequence_parallel_size: 1
 
 custom_reward_function:
   path: null
