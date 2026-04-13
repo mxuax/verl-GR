@@ -18,12 +18,9 @@ class OpenOneRecGRPORuntime(TaskRuntime):
         self,
         *,
         project_root: str | Path | None = None,
-        openonerec_root: str | Path | None = None,
         ray_runtime: RayPPOTrainerRuntime | None = None,
     ) -> None:
         self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[3]
-        self.openonerec_root = Path(openonerec_root) if openonerec_root else (self.project_root.parent / "OpenOneRec")
-        self.openonerec_verl_rl = self.openonerec_root / "verl_rl"
         self.local_recipe_root = self.project_root / "verl_gr" / "recipes" / "openonerec"
         self.ray_runtime = ray_runtime or RayPPOTrainerRuntime()
         self.last_overrides: list[str] = []
