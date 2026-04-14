@@ -49,6 +49,7 @@ RESPONSE_LENGTH="${RESPONSE_LENGTH:-2048}"
 STAGE1_MAX_TOKENS="${STAGE1_MAX_TOKENS:-1024}"
 STAGE2_NUM_TOKENS="${STAGE2_NUM_TOKENS:-3}"
 FILTER_OVERLONG_PROMPTS_WORKERS="${FILTER_OVERLONG_PROMPTS_WORKERS:-16}"
+AGENT_LOOP_NUM_WORKERS="${N_GPUS:-1}"
 
 ENABLE_THINK="${ENABLE_THINK:-False}"
 ENABLE_NONTHINK="${ENABLE_NONTHINK:-False}"
@@ -80,6 +81,7 @@ echo "Cluster: ${N_NODES} node(s) x ${N_GPUS} GPU(s)"
 echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
 echo "Data filter workers: ${FILTER_OVERLONG_PROMPTS_WORKERS}"
+echo "Agent loop workers: ${AGENT_LOOP_NUM_WORKERS}"
 echo "Output: ${OUTPUT_DIR}"
 echo "Ray temp dir: ${RAY_TMPDIR}"
 echo "==================================="
@@ -133,6 +135,7 @@ done
   actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.max_num_seqs=2048 \
+  actor_rollout_ref.rollout.agent.num_workers="${AGENT_LOOP_NUM_WORKERS}" \
   actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
   actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
   actor_rollout_ref.actor.optim.weight_decay=0.1 \

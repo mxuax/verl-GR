@@ -29,6 +29,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
 
     def _build_overrides(self, env: Mapping[str, str], n_nodes: int, n_gpus: int) -> list[str]:
         train_batch_size = int(env.get("TRAIN_BATCH_SIZE", str(n_nodes * n_gpus)))
+        agent_loop_num_workers = int(env.get("AGENT_LOOP_NUM_WORKERS", "1"))
         onerec_recipe_path = self.local_recipe_root / "onerec_recipe.py"
         return [
             "algorithm.adv_estimator=grpo",
@@ -64,6 +65,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
             f"actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu={env.get('MAX_TOKENS_PER_GPU', '40960')}",
             f"actor_rollout_ref.rollout.max_num_batched_tokens={env.get('MAX_TOKENS_PER_GPU', '40960')}",
             "actor_rollout_ref.rollout.max_num_seqs=2048",
+            f"actor_rollout_ref.rollout.agent.num_workers={agent_loop_num_workers}",
             f"actor_rollout_ref.actor.optim.lr={env.get('LEARNING_RATE', '2e-6')}",
             "actor_rollout_ref.actor.optim.lr_warmup_steps=10",
             "actor_rollout_ref.actor.optim.weight_decay=0.1",
