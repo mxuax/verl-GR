@@ -86,7 +86,10 @@ class OneRecDataset(Dataset):
         if self.enable_think and self.enable_nonthink:
             raise ValueError("enable_think and enable_nonthink cannot be both True")
 
-        self.num_workers = os.cpu_count()
+        configured_workers = config.get("filter_overlong_prompts_workers", max(1, os.cpu_count() // 4))
+        self.num_workers = configured_workers
+        if self.num_workers is not None:
+            self.num_workers = min(self.num_workers, os.cpu_count())
         self.use_shm = config.get("use_shm", False)
         self.serialize_dataset = False
 
