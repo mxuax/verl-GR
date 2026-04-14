@@ -200,6 +200,7 @@ metric_utils_mod = import_module("verl.trainer.ppo.metric_utils")
 core_algos = import_module("verl.trainer.ppo.core_algos")
 protocol_mod = import_module("verl.protocol")
 torch_functional = import_module("verl.utils.torch_functional")
+reward_mod = import_module("verl.trainer.ppo.reward")
 DataProto = getattr(import_module("verl"), "DataProto")
 np = import_module("numpy")
 torch = import_module("torch")
@@ -212,6 +213,7 @@ process_validation_metrics = getattr(metric_utils_mod, "process_validation_metri
 pad_dataproto_to_divisor = getattr(protocol_mod, "pad_dataproto_to_divisor")
 unpad_dataproto = getattr(protocol_mod, "unpad_dataproto")
 masked_mean = getattr(torch_functional, "masked_mean")
+extract_reward = getattr(reward_mod, "extract_reward")
 RayPPOTrainerBase = getattr(ray_trainer_mod, "RayPPOTrainer")
 
 
@@ -313,7 +315,11 @@ class RayPPOTrainer(RayPPOTrainerBase):
             if not use_beam_search_val:
                 test_batch = test_batch.repeat(repeat_times=val_kwargs.n, interleave=True)
 
-            if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
+            if (
+                self.use_rm
+                and "reward_model" in test_batch[0].non_tensor_batch
+                and test_batch[0].non_tensor_batch["reward_model"].get("style") == "model"
+            ):
                 return {}
 
             input_ids = test_batch.batch["input_ids"]
@@ -417,14 +423,17 @@ class RayPPOTrainer(RayPPOTrainerBase):
                         extra_info_arr[i] = {}
                     extra_info_arr[i]["generated_items"] = generated_items_arr[i]
 
-            result = self.val_reward_fn(test_batch, return_dict=True)
-            reward_tensor = result["reward_tensor"]
+            reward_tensor, reward_extra_info = extract_reward(test_batch)
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_scores.extend(scores)
             reward_extra_infos_dict["reward"].extend(scores)
-            if "reward_extra_info" in result:
-                for key, lst in result["reward_extra_info"].items():
-                    reward_extra_infos_dict[key].extend(lst)
+            for key, values in reward_extra_info.items():
+                if isinstance(values, np.ndarray):
+                    reward_extra_infos_dict[key].extend(values.tolist())
+                elif isinstance(values, list):
+                    reward_extra_infos_dict[key].extend(values)
+                else:
+                    reward_extra_infos_dict[key].append(values)
 
             if "__num_turns__" in test_batch.non_tensor_batch:
                 sample_turns.append(test_batch.non_tensor_batch["__num_turns__"])

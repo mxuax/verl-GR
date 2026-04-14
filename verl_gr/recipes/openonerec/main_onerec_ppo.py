@@ -57,16 +57,26 @@ def _sanitize_fsdp2_wrap_policy(config) -> None:
             wrap_policy["transformer_layer_cls_to_wrap"] = normalized
 
 
+def _get_reward_model_cfg(config):
+    reward_root = config.get("reward")
+    if reward_root is not None and reward_root.get("reward_model") is not None:
+        return reward_root.reward_model
+    legacy_cfg = config.get("reward_model")
+    if legacy_cfg is not None:
+        return legacy_cfg
+    return None
+
+
 def _build_main():
     hydra = import_module("hydra")
     ray = import_module("ray")
     OmegaConf = getattr(import_module("omegaconf"), "OmegaConf")
     runtime_symbols = get_ppo_runtime_symbols()
-    get_ppo_ray_runtime_env = runtime_symbols["get_ppo_ray_runtime_env"]
+    base_run_ppo = runtime_symbols["run_ppo"]
     create_rl_dataset = runtime_symbols["create_rl_dataset"]
     create_rl_sampler = runtime_symbols["create_rl_sampler"]
-    is_cuda_available = runtime_symbols["is_cuda_available"]
-    load_reward_manager = runtime_symbols["load_reward_manager"]
+    auto_set_device = runtime_symbols["auto_set_device"]
+    migrate_legacy_reward_impl = runtime_symbols["migrate_legacy_reward_impl"]
     copy_to_local = runtime_symbols["copy_to_local"]
     hf_tokenizer = runtime_symbols["hf_tokenizer"]
     hf_processor = runtime_symbols["hf_processor"]
@@ -82,6 +92,7 @@ def _build_main():
         def run(self, config):
             _sanitize_fsdp2_wrap_policy(config)
             OmegaConf.resolve(config)
+            reward_model_cfg = _get_reward_model_cfg(config)
             local_path = copy_to_local(
                 config.actor_rollout_ref.model.path,
                 use_shm=config.actor_rollout_ref.model.get("use_shm", False),
@@ -120,13 +131,13 @@ def _build_main():
             else:
                 raise NotImplementedError(f"Unknown strategy: {config.actor_rollout_ref.actor.strategy}")
 
-            if config.reward_model.get("enable", False):
-                if config.reward_model.strategy in {"fsdp", "fsdp2"}:
+            if reward_model_cfg is not None and reward_model_cfg.get("enable", False):
+                if reward_model_cfg.strategy in {"fsdp", "fsdp2"}:
                     RewardModelWorker = get_fsdp_reward_model_worker()
-                elif config.reward_model.strategy == "megatron":
+                elif reward_model_cfg.strategy == "megatron":
                     RewardModelWorker = get_megatron_reward_model_worker()
                 else:
-                    raise NotImplementedError(f"Unknown reward model strategy: {config.reward_model.strategy}")
+                    raise NotImplementedError(f"Unknown reward model strategy: {reward_model_cfg.strategy}")
             else:
                 RewardModelWorker = None
 
@@ -139,15 +150,13 @@ def _build_main():
             if config.critic.get("enable", True):
                 role_worker_mapping[Role.Critic] = ray.remote(CriticWorker)
                 mapping[Role.Critic] = global_pool_id
-            if config.reward_model.get("enable", False) and RewardModelWorker is not None:
+            if reward_model_cfg is not None and reward_model_cfg.get("enable", False) and RewardModelWorker is not None:
                 role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
                 mapping[Role.RewardModel] = global_pool_id
             if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
                 role_worker_mapping[Role.RefPolicy] = ray.remote(actor_rollout_cls)
                 mapping[Role.RefPolicy] = global_pool_id
 
-            reward_fn = load_reward_manager(config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {}))
-            val_reward_fn = load_reward_manager(config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {}))
             resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
             train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor, is_train=True)
@@ -161,8 +170,6 @@ def _build_main():
                 role_worker_mapping=role_worker_mapping,
                 resource_pool_manager=resource_pool_manager,
                 ray_worker_group_cls=ray_worker_group_cls,
-                reward_fn=reward_fn,
-                val_reward_fn=val_reward_fn,
                 train_dataset=train_dataset,
                 val_dataset=val_dataset,
                 collate_fn=collate_fn,
@@ -171,27 +178,15 @@ def _build_main():
             trainer.init_workers()
             trainer.fit()
 
-    def run_ppo(config) -> None:
+    def run_onerec_ppo(config) -> None:
         _sanitize_fsdp2_wrap_policy(config)
-        if not ray.is_initialized():
-            ray.init(runtime_env=get_ppo_ray_runtime_env(), num_cpus=config.ray_init.num_cpus)
-        if (
-            is_cuda_available
-            and config.trainer.get("profile_steps") is not None
-            and len(config.trainer.get("profile_steps", [])) > 0
-        ):
-            nsight_options = OmegaConf.to_container(config.trainer.controller_nsight_options)
-            runner = OneRecTaskRunner.options(runtime_env={"nsight": nsight_options}).remote()
-        else:
-            runner = OneRecTaskRunner.remote()
-        ray.get(runner.run.remote(config))
-        timeline_json_file = config.ray_init.get("timeline_json_file", None)
-        if timeline_json_file:
-            ray.timeline(filename=timeline_json_file)
+        auto_set_device(config)
+        config = migrate_legacy_reward_impl(config)
+        base_run_ppo(config, task_runner_class=OneRecTaskRunner)
 
     @hydra.main(config_path=str(_CONFIG_ROOT), config_name="grpo_trainer", version_base=None)
     def main(config):
-        run_ppo(config)
+        run_onerec_ppo(config)
 
     return main
 

@@ -27,8 +27,8 @@ trainer:
   experiment_name: grpo_two_stage
   val_before_train: true
 
-# ray_init is consumed by main_onerec_ppo.py (config.ray_init.num_cpus)
-# before it delegates to main_ppo.run_ppo, which reads ray_kwargs instead.
+# ray_kwargs.ray_init is consumed by main_ppo.run_ppo in verl>=0.7.1.
+# Keep ray_init shim for local overrides that still rely on older scripts.
 ray_init:
   num_cpus: null
   timeline_json_file: null
