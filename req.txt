@@ -1,2 +1,5 @@
-verl==0.7.1
-flash_attn==2.7.4.post1
+# this follows scripts/install_vllm_sglang_mcore.sh@verl==0.7.1
+verl==0.7.1  # latest as of apr
+vllm==0.11.0  # the built-in readme? version of vllm in verl below causes discrepancy
+torchvision==0.26.0
+flash_attn==2.8.1
