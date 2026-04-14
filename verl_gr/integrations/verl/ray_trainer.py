@@ -71,7 +71,7 @@ class RayPPOTrainerRuntime:
         command = [self.python_bin, "-u", "-m", entrypoint_module, *list(overrides)]
         runtime_env = os.environ.copy()
         runtime_env.update(dict(env))
-        runtime_env.setdefault("VLLM_ATTENTION_BACKEND", "XFORMERS")
+        runtime_env.setdefault("VLLM_ATTENTION_BACKEND", "FLASH_ATTN")
         runtime_env.setdefault("WANDB_MODE", "offline")
 
         self.last_command = command

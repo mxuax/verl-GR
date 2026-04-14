@@ -338,6 +338,11 @@ class RayPPOTrainer(RayPPOTrainerBase):
                 batch_keys=batch_keys_to_pop,
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
             )
+            # Keep reward-routing metadata in generation batch so async reward loop
+            # can resolve source-specific scoring during validation.
+            for key in ("source", "data_source", "reward_model", "extra_info", "uid"):
+                if key in test_batch.non_tensor_batch and key not in test_gen_batch.non_tensor_batch:
+                    test_gen_batch.non_tensor_batch[key] = test_batch.non_tensor_batch[key]
 
             meta_info = {
                 "eos_token_id": self.tokenizer.eos_token_id,
