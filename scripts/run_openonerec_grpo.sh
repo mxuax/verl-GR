@@ -105,7 +105,7 @@ done
   data.max_prompt_length=10240 \
   ++data.enable_think="${ENABLE_THINK}" \
   ++data.enable_nonthink="${ENABLE_NONTHINK}" \
-  ++data.use_force_prefix`="${USE_FORCE_PREFIX}" \
+  ++data.use_force_prefix="${USE_FORCE_PREFIX}" \
   data.prompt_key=prompt \
   data.shuffle=True \
   data.max_response_length="${RESPONSE_LENGTH}" \
@@ -142,7 +142,7 @@ done
   actor_rollout_ref.rollout.dtype=bfloat16 \
   actor_rollout_ref.rollout.tensor_model_parallel_size="${ROLLOUT_TP_SIZE}" \
   actor_rollout_ref.rollout.name=vllm \
-  actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+  actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
   ++actor_rollout_ref.rollout.engine_kwargs.vllm.max_logprobs=320 \
   actor_rollout_ref.rollout.temperature="${TEMPERATURE}" \
   actor_rollout_ref.rollout.top_p=1.0 \
