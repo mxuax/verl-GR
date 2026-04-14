@@ -48,6 +48,7 @@ STAGE2_BEAM_SIZE="${STAGE2_BEAM_SIZE:-32}"
 RESPONSE_LENGTH="${RESPONSE_LENGTH:-2048}"
 STAGE1_MAX_TOKENS="${STAGE1_MAX_TOKENS:-1024}"
 STAGE2_NUM_TOKENS="${STAGE2_NUM_TOKENS:-3}"
+FILTER_OVERLONG_PROMPTS_WORKERS="${FILTER_OVERLONG_PROMPTS_WORKERS:-16}"
 
 ENABLE_THINK="${ENABLE_THINK:-False}"
 ENABLE_NONTHINK="${ENABLE_NONTHINK:-False}"
@@ -61,12 +62,15 @@ PROJECT_NAME="${PROJECT_NAME:-OneRec_RL}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-grpo_two_stage}"
 OUTPUT_DIR="${OUTPUT_DIR:-${VERL_GR_ROOT}/outputs/openonerec}"
 WANDB_MODE="${WANDB_MODE:-offline}"
+RAY_TMPDIR="${RAY_TMPDIR:-${OUTPUT_DIR}/ray_tmp}"
 
-mkdir -p "${VERL_GR_ROOT}/logs" "${OUTPUT_DIR}"
+mkdir -p "${VERL_GR_ROOT}/logs" "${OUTPUT_DIR}" "${RAY_TMPDIR}"
 
 export PYTHONPATH="${VERL_GR_ROOT}:${PYTHONPATH:-}"
 export VLLM_ATTENTION_BACKEND
 export WANDB_MODE
+export RAY_TMPDIR
+export TMPDIR="${RAY_TMPDIR}"
 
 echo "==================================="
 echo "OpenOneRec GRPO (verl-GR runtime)"
@@ -75,7 +79,9 @@ echo "OpenOneRec data root: ${OPENONEREC_ROOT}"
 echo "Cluster: ${N_NODES} node(s) x ${N_GPUS} GPU(s)"
 echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
+echo "Data filter workers: ${FILTER_OVERLONG_PROMPTS_WORKERS}"
 echo "Output: ${OUTPUT_DIR}"
+echo "Ray temp dir: ${RAY_TMPDIR}"
 echo "==================================="
 
 # Guardrail: block accidental fallback to legacy OpenOneRec recipe imports.
@@ -99,12 +105,13 @@ done
   data.max_prompt_length=10240 \
   ++data.enable_think="${ENABLE_THINK}" \
   ++data.enable_nonthink="${ENABLE_NONTHINK}" \
-  ++data.use_force_prefix="${USE_FORCE_PREFIX}" \
+  ++data.use_force_prefix`="${USE_FORCE_PREFIX}" \
   data.prompt_key=prompt \
   data.shuffle=True \
   data.max_response_length="${RESPONSE_LENGTH}" \
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.filter_overlong_prompts=True \
+  data.filter_overlong_prompts_workers="${FILTER_OVERLONG_PROMPTS_WORKERS}" \
   data.truncation=error \
   data.custom_cls.path="${LOCAL_OPENONEREC_RECIPE_ROOT}/onerec_recipe.py" \
   data.custom_cls.name=OneRecDataset \
@@ -134,13 +141,8 @@ done
   actor_rollout_ref.rollout.n="${ROLLOUT_N}" \
   actor_rollout_ref.rollout.dtype=bfloat16 \
   actor_rollout_ref.rollout.tensor_model_parallel_size="${ROLLOUT_TP_SIZE}" \
-  actor_rollout_ref.rollout.name=two_stage \
-  ++actor_rollout_ref.rollout.backend=vllm \
+  actor_rollout_ref.rollout.name=vllm \
   actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
-  ++actor_rollout_ref.rollout.max_length="${RESPONSE_LENGTH}" \
-  ++actor_rollout_ref.rollout.stage1_max_tokens="${STAGE1_MAX_TOKENS}" \
-  ++actor_rollout_ref.rollout.stage2_num_tokens="${STAGE2_NUM_TOKENS}" \
-  ++actor_rollout_ref.rollout.stage2_beam_size="${STAGE2_BEAM_SIZE}" \
   ++actor_rollout_ref.rollout.engine_kwargs.vllm.max_logprobs=320 \
   actor_rollout_ref.rollout.temperature="${TEMPERATURE}" \
   actor_rollout_ref.rollout.top_p=1.0 \
