@@ -296,6 +296,26 @@ def compute_advantage(
 class RayPPOTrainer(RayPPOTrainerBase):
     """RayPPOTrainer override with OneRec validation/beam expansion handling."""
 
+    def _get_gen_batch(self, batch: DataProto) -> DataProto:
+        """Prepare generation batch without conflicting prompt tensors.
+
+        In verl>=0.7.1 async rollout mode, generation output may include input_ids.
+        If original training batch still carries prompt-side input_ids/attention_mask/
+        position_ids, DataProto.union() asserts on key collisions. For OneRec dataset,
+        we remove those prompt tensors before generation and keep reward-routing keys.
+        """
+        reward_keys = set({"source", "data_source", "reward_model", "extra_info", "uid"}) & batch.non_tensor_batch.keys()
+        batch_keys_to_pop = [
+            key for key in ("input_ids", "attention_mask", "position_ids") if key in batch.batch.keys()
+        ]
+        non_tensor_batch_keys_to_pop = set(batch.non_tensor_batch.keys()) - reward_keys
+        gen_batch = batch.pop(
+            batch_keys=batch_keys_to_pop,
+            non_tensor_batch_keys=list(non_tensor_batch_keys_to_pop),
+        )
+        gen_batch.non_tensor_batch.update(batch.non_tensor_batch)
+        return gen_batch
+
     def _validate(self):
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
