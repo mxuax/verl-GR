@@ -8,7 +8,6 @@ from typing import Any, Mapping
 
 from verl_gr.contracts.artifact_contract import CheckpointArtifact
 from verl_gr.contracts.rl_contract import RLInput, RLOutput
-from verl_gr.integrations.verl.worker_factory import WorkerRouting
 
 
 @dataclass(frozen=True)
@@ -26,7 +25,7 @@ class RuntimeTrainerHandle:
     """Description of the trainer object created by runtime bridge."""
 
     trainer_entrypoint: str
-    worker_routing: WorkerRouting
+    role_worker_mapping: Mapping[str, str] = field(default_factory=dict)
     runtime_args: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -45,12 +44,16 @@ class VerlRLRuntime:
             "runtime_args": dict(runtime_args),
         }
 
-    def build_trainer(self, runtime_args: Mapping[str, Any], worker_routing: WorkerRouting) -> RuntimeTrainerHandle:
+    def build_trainer(
+        self,
+        runtime_args: Mapping[str, Any],
+        role_worker_mapping: Mapping[str, str] | None = None,
+    ) -> RuntimeTrainerHandle:
         """Build a lightweight trainer handle consumed by the fit loop."""
 
         return RuntimeTrainerHandle(
             trainer_entrypoint=self.runtime_config.trainer_entrypoint,
-            worker_routing=worker_routing,
+            role_worker_mapping=dict(role_worker_mapping or {}),
             runtime_args=dict(runtime_args),
         )
 
@@ -62,7 +65,7 @@ class VerlRLRuntime:
         return {
             "status": "initialized",
             "trainer_entrypoint": trainer.trainer_entrypoint,
-            "worker_roles": sorted(role.value for role in trainer.worker_routing.role_worker_mapping),
+            "worker_roles": sorted(trainer.role_worker_mapping.keys()),
         }
 
     def collect_artifacts(self, rl_input: RLInput, fit_metrics: Mapping[str, Any]) -> RLOutput:
@@ -84,11 +87,16 @@ class VerlRLRuntime:
             traces={"task_config_path": str(rl_input.config_artifact.task_config_path)},
         )
 
-    def run(self, rl_input: RLInput, runtime_args: Mapping[str, Any], worker_routing: WorkerRouting) -> RLOutput:
+    def run(
+        self,
+        rl_input: RLInput,
+        runtime_args: Mapping[str, Any],
+        role_worker_mapping: Mapping[str, str] | None = None,
+    ) -> RLOutput:
         """Run full runtime lifecycle and return RL output artifact."""
 
         self.initialize_runtime_env(runtime_args)
-        trainer = self.build_trainer(runtime_args, worker_routing)
+        trainer = self.build_trainer(runtime_args, role_worker_mapping=role_worker_mapping)
         fit_metrics = self.run_fit_loop(trainer)
         return self.collect_artifacts(rl_input, fit_metrics)
 

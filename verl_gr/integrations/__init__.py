@@ -5,10 +5,6 @@ from verl_gr.integrations.verl import (
     RLRuntimeConfig,
     RuntimeTrainerHandle,
     VerlRLRuntime,
-    WorkerFactoryConfig,
-    WorkerRole,
-    WorkerRouting,
-    build_worker_routing,
 )
 
 __all__ = [
@@ -16,9 +12,5 @@ __all__ = [
     "RLRuntimeConfig",
     "RuntimeTrainerHandle",
     "VerlRLRuntime",
-    "WorkerFactoryConfig",
-    "WorkerRole",
-    "WorkerRouting",
-    "build_worker_routing",
 ]
 
