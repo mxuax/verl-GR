@@ -82,10 +82,12 @@ def _build_main():
     hf_processor = runtime_symbols["hf_processor"]
     collate_fn = runtime_symbols["collate_fn"]
 
-    onerec_trainer_mod = import_module("verl_gr.recipes.openonerec.onerec_ray_trainer")
-    Role = getattr(onerec_trainer_mod, "Role")
-    ResourcePoolManager = getattr(onerec_trainer_mod, "ResourcePoolManager")
-    RayPPOTrainer = getattr(onerec_trainer_mod, "RayPPOTrainer")
+    # Import trainer symbols lazily to avoid importing heavy verl stack
+    # during module import/inspection time.
+    rl_trainer_mod = import_module("verl_gr.trainers.rl_trainer")
+    Role = getattr(rl_trainer_mod, "Role")
+    ResourcePoolManager = getattr(rl_trainer_mod, "ResourcePoolManager")
+    RayPPOTrainer = getattr(rl_trainer_mod, "RayPPOTrainer")
 
     @ray.remote(num_cpus=1)
     class OneRecTaskRunner:
