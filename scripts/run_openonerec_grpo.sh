@@ -37,8 +37,7 @@ ROLLOUT_TP_SIZE="${ROLLOUT_TP_SIZE:-1}"
 VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
-TEMPERATURE="${TEMPERATURE:-1}"
-FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
+FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp2}"
 if [[ "${FSDP_STRATEGY}" == "fsdp2" ]]; then
   USE_FUSED_KERNELS="${USE_FUSED_KERNELS:-True}"
   USE_REMOVE_PADDING="${USE_REMOVE_PADDING:-False}"
@@ -163,7 +162,7 @@ done
   actor_rollout_ref.rollout.name=vllm \
   actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
   ++actor_rollout_ref.rollout.engine_kwargs.vllm.max_logprobs=320 \
-  actor_rollout_ref.rollout.temperature="${TEMPERATURE}" \
+  actor_rollout_ref.rollout.temperature=1.0 \
   actor_rollout_ref.rollout.top_p=1.0 \
   actor_rollout_ref.rollout.do_sample=True \
   actor_rollout_ref.actor.use_kl_loss=True \
@@ -181,6 +180,7 @@ done
   trainer.default_local_dir="${OUTPUT_DIR}/ckpt" \
   trainer.total_epochs=20 \
   trainer.val_before_train=True \
+  ++trainer.logger=tensorboard \
   actor_rollout_ref.ref.strategy="${FSDP_STRATEGY}" \
   actor_rollout_ref.actor.strategy="${FSDP_STRATEGY}" \
   ++critic.enable=False \
