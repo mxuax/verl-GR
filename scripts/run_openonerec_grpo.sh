@@ -38,7 +38,8 @@ VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 TEMPERATURE="${TEMPERATURE:-1}"
-USE_FUSED_KERNELS="${USE_FUSED_KERNELS:-True}"
+USE_FUSED_KERNELS="${USE_FUSED_KERNELS:-False}"
+USE_REMOVE_PADDING="${USE_REMOVE_PADDING:-False}"
 
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-True}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
@@ -84,6 +85,7 @@ echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
 echo "Data filter workers: ${FILTER_OVERLONG_PROMPTS_WORKERS}"
 echo "Agent loop workers: ${AGENT_LOOP_NUM_WORKERS}"
 echo "Use fused kernels: ${USE_FUSED_KERNELS}"
+echo "Use remove padding: ${USE_REMOVE_PADDING}"
 echo "Output: ${OUTPUT_DIR}"
 echo "Ray temp dir: ${RAY_TMPDIR}"
 echo "==================================="
@@ -127,7 +129,7 @@ done
   actor_rollout_ref.rollout.calculate_log_probs=False \
   actor_rollout_ref.actor.clip_ratio_high=0.28 \
   actor_rollout_ref.model.enable_activation_offload=True \
-  actor_rollout_ref.model.use_remove_padding=True \
+  actor_rollout_ref.model.use_remove_padding="${USE_REMOVE_PADDING}" \
   custom_reward_function.path="${LOCAL_OPENONEREC_RECIPE_ROOT}/onerec_recipe.py" \
   custom_reward_function.name=compute_score \
   actor_rollout_ref.actor.use_dynamic_bsz="${USE_DYNAMIC_BSZ}" \

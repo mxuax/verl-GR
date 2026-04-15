@@ -30,7 +30,8 @@ class OpenOneRecGRPORuntime(TaskRuntime):
     def _build_overrides(self, env: Mapping[str, str], n_nodes: int, n_gpus: int) -> list[str]:
         train_batch_size = int(env.get("TRAIN_BATCH_SIZE", str(n_nodes * n_gpus)))
         agent_loop_num_workers = int(env.get("AGENT_LOOP_NUM_WORKERS", "1"))
-        use_fused_kernels = env.get("USE_FUSED_KERNELS", "True")
+        use_fused_kernels = env.get("USE_FUSED_KERNELS", "False")
+        use_remove_padding = env.get("USE_REMOVE_PADDING", "False")
         onerec_recipe_path = self.local_recipe_root / "onerec_recipe.py"
         return [
             "algorithm.adv_estimator=grpo",
@@ -58,7 +59,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
             "actor_rollout_ref.rollout.calculate_log_probs=False",
             "actor_rollout_ref.actor.clip_ratio_high=0.28",
             "actor_rollout_ref.model.enable_activation_offload=True",
-            "actor_rollout_ref.model.use_remove_padding=True",
+            f"actor_rollout_ref.model.use_remove_padding={use_remove_padding}",
             f"actor_rollout_ref.actor.use_dynamic_bsz={env.get('USE_DYNAMIC_BSZ', 'True')}",
             f"actor_rollout_ref.actor.ppo_max_token_len_per_gpu={env.get('MAX_TOKENS_PER_GPU', '40960')}",
             f"actor_rollout_ref.actor.ppo_mini_batch_size={train_batch_size}",
