@@ -30,8 +30,12 @@ class OpenOneRecGRPORuntime(TaskRuntime):
     def _build_overrides(self, env: Mapping[str, str], n_nodes: int, n_gpus: int) -> list[str]:
         train_batch_size = int(env.get("TRAIN_BATCH_SIZE", str(n_nodes * n_gpus)))
         agent_loop_num_workers = int(env.get("AGENT_LOOP_NUM_WORKERS", "1"))
-        use_fused_kernels = env.get("USE_FUSED_KERNELS", "False")
+        fsdp_strategy = env.get("FSDP_STRATEGY", "fsdp")
+        default_use_fused = "True" if fsdp_strategy == "fsdp2" else "False"
+        default_fused_backend = "triton" if fsdp_strategy == "fsdp2" else "torch"
+        use_fused_kernels = env.get("USE_FUSED_KERNELS", default_use_fused)
         use_remove_padding = env.get("USE_REMOVE_PADDING", "False")
+        fused_kernel_impl_backend = env.get("FUSED_KERNEL_IMPL_BACKEND", default_fused_backend)
         onerec_recipe_path = self.local_recipe_root / "onerec_recipe.py"
         return [
             "algorithm.adv_estimator=grpo",
@@ -72,6 +76,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
             "actor_rollout_ref.actor.optim.lr_warmup_steps=10",
             "actor_rollout_ref.actor.optim.weight_decay=0.1",
             f"actor_rollout_ref.model.use_fused_kernels={use_fused_kernels}",
+            f"actor_rollout_ref.model.fused_kernel_options.impl_backend={fused_kernel_impl_backend}",
             f"actor_rollout_ref.model.path={env.get('BASE_MODEL', '/path/to/your/model')}",
             "actor_rollout_ref.model.enable_gradient_checkpointing=True",
             f"actor_rollout_ref.rollout.n={env.get('ROLLOUT_N', '1')}",
@@ -98,8 +103,8 @@ class OpenOneRecGRPORuntime(TaskRuntime):
             f"trainer.default_local_dir={env.get('OUTPUT_DIR', 'outputs/openonerec')}/ckpt",
             "trainer.total_epochs=20",
             "trainer.val_before_train=True",
-            "actor_rollout_ref.ref.strategy=fsdp2",
-            "actor_rollout_ref.actor.strategy=fsdp2",
+            f"actor_rollout_ref.ref.strategy={fsdp_strategy}",
+            f"actor_rollout_ref.actor.strategy={fsdp_strategy}",
             "++critic.enable=False",
             "++actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[Qwen3DecoderLayer]",
             "++actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[Qwen3DecoderLayer]",
