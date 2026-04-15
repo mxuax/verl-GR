@@ -38,6 +38,7 @@ VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 TEMPERATURE="${TEMPERATURE:-1}"
+USE_FUSED_KERNELS="${USE_FUSED_KERNELS:-True}"
 
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-True}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
@@ -82,6 +83,7 @@ echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
 echo "Data filter workers: ${FILTER_OVERLONG_PROMPTS_WORKERS}"
 echo "Agent loop workers: ${AGENT_LOOP_NUM_WORKERS}"
+echo "Use fused kernels: ${USE_FUSED_KERNELS}"
 echo "Output: ${OUTPUT_DIR}"
 echo "Ray temp dir: ${RAY_TMPDIR}"
 echo "==================================="
@@ -139,6 +141,7 @@ done
   actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
   actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
   actor_rollout_ref.actor.optim.weight_decay=0.1 \
+  actor_rollout_ref.model.use_fused_kernels="${USE_FUSED_KERNELS}" \
   actor_rollout_ref.model.path="${BASE_MODEL}" \
   actor_rollout_ref.model.enable_gradient_checkpointing=True \
   actor_rollout_ref.rollout.n="${ROLLOUT_N}" \

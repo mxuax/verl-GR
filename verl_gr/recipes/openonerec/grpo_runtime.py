@@ -30,6 +30,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
     def _build_overrides(self, env: Mapping[str, str], n_nodes: int, n_gpus: int) -> list[str]:
         train_batch_size = int(env.get("TRAIN_BATCH_SIZE", str(n_nodes * n_gpus)))
         agent_loop_num_workers = int(env.get("AGENT_LOOP_NUM_WORKERS", "1"))
+        use_fused_kernels = env.get("USE_FUSED_KERNELS", "True")
         onerec_recipe_path = self.local_recipe_root / "onerec_recipe.py"
         return [
             "algorithm.adv_estimator=grpo",
@@ -69,6 +70,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
             f"actor_rollout_ref.actor.optim.lr={env.get('LEARNING_RATE', '2e-6')}",
             "actor_rollout_ref.actor.optim.lr_warmup_steps=10",
             "actor_rollout_ref.actor.optim.weight_decay=0.1",
+            f"actor_rollout_ref.model.use_fused_kernels={use_fused_kernels}",
             f"actor_rollout_ref.model.path={env.get('BASE_MODEL', '/path/to/your/model')}",
             "actor_rollout_ref.model.enable_gradient_checkpointing=True",
             f"actor_rollout_ref.rollout.n={env.get('ROLLOUT_N', '1')}",
