@@ -1,20 +1,6 @@
-"""Recipes package for task-level wiring."""
+"""Recipes package exports."""
 
-from verl_gr.recipes.openonerec import (
-    OpenOneRecDistillPipeline,
-    OpenOneRecGRPORuntime,
-    OpenOneRecRecipe,
-    OpenOneRecRLPipeline,
-    OpenOneRecSFTPipeline,
-)
-from verl_gr.recipes.recipe_registry import RecipeRegistry
+from verl_gr.recipes.openonerec import OpenOneRecGRPORuntime
 
-__all__ = [
-    "OpenOneRecRecipe",
-    "OpenOneRecSFTPipeline",
-    "OpenOneRecDistillPipeline",
-    "OpenOneRecRLPipeline",
-    "OpenOneRecGRPORuntime",
-    "RecipeRegistry",
-]
+__all__ = ["OpenOneRecGRPORuntime"]
 

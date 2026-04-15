@@ -4,7 +4,7 @@ This checklist tracks old-vs-new behavior parity for the Phase B integration lay
 
 ## Legacy to New Flow Checklist
 
-- [x] Legacy `main_onerec_ppo` has a recipe-level counterpart (`recipes/openonerec/recipe.py`)
+- [x] Legacy `main_onerec_ppo` has a runtime-level counterpart (`recipes/openonerec/main_onerec_ppo.py`)
 - [x] Legacy `onerec_ray_trainer` lifecycle is mapped into `integrations/verl/rl_runtime.py`
 - [x] Legacy role-worker mapping is represented in `integrations/verl/worker_factory.py`
 - [x] Two-stage rollout route resolves to the OneRec custom FSDP worker mapping
@@ -26,7 +26,7 @@ This checklist tracks old-vs-new behavior parity for the Phase B integration lay
 
 ## Validation Gate (Smoke)
 
-- recipe registration + retrieval succeeds from default registry
+- runtime entrypoint module resolves and can be executed in dry-run mode
 - runtime bridge can initialize and return dry-run RL artifacts
 - config files are present with required keys for paths/stage config linkage
 - artifact handoff matrix can be instantiated into an `ArtifactBundle`
