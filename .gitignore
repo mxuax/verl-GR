@@ -1,4 +1,77 @@
-# Python bytecode & cache
+# IDE
+.idea/
+.vscode/
+.claude/
+.gemini/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Logs
+*.log
+logs/
+tmp_ray/
+outputs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ML/DL
+wandb/
+mlruns/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+output/
+checkpoints/
+ckpt/
+
+# Data
+# *.parquet
+# *.csv
+# *.json
+# *.jsonl
+
+# Ray
+ray_results/
