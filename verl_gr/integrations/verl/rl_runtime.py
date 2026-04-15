@@ -15,7 +15,7 @@ from verl_gr.integrations.verl.worker_factory import WorkerRouting
 class RLRuntimeConfig:
     """Runtime-level values mapped from stage configuration."""
 
-    trainer_entrypoint: str = "verl_gr.recipes.openonerec.main_onerec_ppo"
+    trainer_entrypoint: str = "verl_gr.trainers.main_ppo"
     ray_runtime_env: str = "ppo_default"
     checkpoint_root: Path = Path("outputs/openonerec/rl")
     dry_run: bool = True

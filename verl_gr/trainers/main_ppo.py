@@ -4,6 +4,7 @@ import os
 from importlib import import_module
 from pathlib import Path
 
+from verl_gr.components.tokenization.sid_tokenizer import build_hf_tokenizer_and_processor
 from verl_gr.integrations.verl.openonerec_bridge import (
     get_async_actor_rollout_ref_worker,
     get_critic_worker,
@@ -15,7 +16,7 @@ from verl_gr.integrations.verl.openonerec_bridge import (
     get_ray_worker_group,
 )
 
-_CONFIG_ROOT = Path(__file__).resolve().parents[3] / "configs" / "verl_gr" / "openonerec"
+_CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr" / "openonerec"
 
 
 def _normalize_layer_wrap_value(value):
@@ -78,8 +79,6 @@ def _build_main():
     auto_set_device = runtime_symbols["auto_set_device"]
     migrate_legacy_reward_impl = runtime_symbols["migrate_legacy_reward_impl"]
     copy_to_local = runtime_symbols["copy_to_local"]
-    hf_tokenizer = runtime_symbols["hf_tokenizer"]
-    hf_processor = runtime_symbols["hf_processor"]
     collate_fn = runtime_symbols["collate_fn"]
 
     # Import trainer symbols lazily to avoid importing heavy verl stack
@@ -100,8 +99,12 @@ def _build_main():
                 use_shm=config.actor_rollout_ref.model.get("use_shm", False),
             )
             trust_remote_code = config.data.get("trust_remote_code", False)
-            tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
-            processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)
+            tokenizer, processor = build_hf_tokenizer_and_processor(
+                local_path,
+                trust_remote_code=trust_remote_code,
+                hf_tokenizer_loader=runtime_symbols["hf_tokenizer"],
+                hf_processor_loader=runtime_symbols["hf_processor"],
+            )
 
             if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
                 RayWorkerGroup = get_ray_worker_group()
@@ -196,4 +199,3 @@ def _build_main():
 if __name__ == "__main__":
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     _build_main()()
-

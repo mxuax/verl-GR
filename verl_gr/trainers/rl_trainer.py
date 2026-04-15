@@ -7,6 +7,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from verl_gr.contracts.artifact_contract import CheckpointArtifact
+from verl_gr.contracts.rl_contract import RLInput, RLOutput
 from verl_gr.integrations.runtime_adapter import TaskRuntime
 from verl_gr.integrations.verl.ray_trainer import RayPPOTrainerRuntime
 
@@ -133,7 +135,7 @@ class OpenOneRecGRPORuntime(TaskRuntime):
         runtime_env = dict(env)
         runtime_env["PYTHONPATH"] = f"{self.project_root}{os.pathsep}{runtime_env.get('PYTHONPATH', '')}"
         completed = self.ray_runtime.run_entrypoint(
-            entrypoint_module="verl_gr.recipes.openonerec.main_onerec_ppo",
+            entrypoint_module="verl_gr.trainers.main_ppo",
             overrides=overrides,
             cwd=self.project_root,
             env=runtime_env,

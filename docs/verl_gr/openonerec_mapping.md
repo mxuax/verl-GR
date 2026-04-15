@@ -5,10 +5,10 @@ entrypoints to the `verl_gr` runtime + integration bridge layout.
 
 ## Entrypoint Mapping
 
-- old `recipe.onerec.main_onerec_ppo` -> new `verl_gr.recipes.openonerec.main_onerec_ppo`
+- old `recipe.onerec.main_onerec_ppo` -> new `verl_gr.trainers.main_ppo`
 - old `recipe.onerec.onerec_ray_trainer` -> new `verl_gr.integrations.verl.rl_runtime.VerlRLRuntime`
 - old `recipe.onerec.onerec_fsdp_workers` -> new `verl_gr.integrations.verl.worker_factory.build_worker_routing`
-- old `recipe.onerec.onerec_vllm_rollout` -> new `verl_gr.recipes.openonerec.onerec_vllm_rollout`
+- old `recipe.onerec.onerec_vllm_rollout` -> new `verl_gr.components.rollout.onerec_vllm_rollout`
 
 ## Stage Ownership (Boundary-Preserving)
 

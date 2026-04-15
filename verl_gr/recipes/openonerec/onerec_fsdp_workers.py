@@ -71,7 +71,7 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         init_device_mesh = getattr(import_module("torch.distributed.device_mesh"), "init_device_mesh")
         device_name_fn = get_device_name()
         OneRecvLLMRollout = getattr(
-            import_module("verl_gr.recipes.openonerec.onerec_vllm_rollout"),
+            import_module("verl_gr.components.rollout.onerec_vllm_rollout"),
             "OneRecvLLMRollout",
         )
 

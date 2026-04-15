@@ -4,7 +4,7 @@ This checklist tracks old-vs-new behavior parity for the Phase B integration lay
 
 ## Legacy to New Flow Checklist
 
-- [x] Legacy `main_onerec_ppo` has a runtime-level counterpart (`recipes/openonerec/main_onerec_ppo.py`)
+- [x] Legacy `main_onerec_ppo` is launched via `verl_gr.trainers.main_ppo`
 - [x] Legacy `onerec_ray_trainer` lifecycle is mapped into `integrations/verl/rl_runtime.py`
 - [x] Legacy role-worker mapping is represented in `integrations/verl/worker_factory.py`
 - [x] Two-stage rollout route resolves to the OneRec custom FSDP worker mapping

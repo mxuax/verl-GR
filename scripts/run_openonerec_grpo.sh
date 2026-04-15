@@ -17,7 +17,6 @@ if [[ ! -d "${LOCAL_OPENONEREC_RECIPE_ROOT}" ]]; then
   echo "Local OpenOneRec recipe root not found: ${LOCAL_OPENONEREC_RECIPE_ROOT}" >&2
   exit 1
 fi
-
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python"
@@ -103,7 +102,7 @@ echo "==================================="
 for arg in "$@"; do
   if [[ "$arg" == *"recipe/onerec"* || "$arg" == *"recipe.onerec"* ]]; then
     echo "Error: legacy OpenOneRec recipe reference detected in argument: $arg" >&2
-    echo "Use verl_gr.recipes.openonerec.* modules only." >&2
+    echo "Use the verl_gr.trainers.main_ppo OpenOneRec launch flow only." >&2
     exit 2
   fi
   if [[ "$arg" == *"transformer_layer_cls_to_wrap={"* ]]; then
@@ -113,7 +112,7 @@ for arg in "$@"; do
   fi
 done
 
-"${PYTHON_BIN}" -u -m verl_gr.recipes.openonerec.main_onerec_ppo \
+"${PYTHON_BIN}" -u -m verl_gr.trainers.main_ppo \
   algorithm.adv_estimator=grpo \
   data.train_files="${TRAIN_FILES}" \
   data.val_files="${VAL_FILES}" \
