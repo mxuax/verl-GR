@@ -296,6 +296,15 @@ def compute_advantage(
 class RayPPOTrainer(RayPPOTrainerBase):
     """RayPPOTrainer override with OneRec validation/beam expansion handling."""
 
+    @staticmethod
+    def _ensure_reward_routing_keys(proto: DataProto) -> None:
+        """Ensure both source aliases exist for reward-loop compatibility."""
+        non_tensor = proto.non_tensor_batch
+        if "data_source" not in non_tensor and "source" in non_tensor:
+            non_tensor["data_source"] = non_tensor["source"]
+        if "source" not in non_tensor and "data_source" in non_tensor:
+            non_tensor["source"] = non_tensor["data_source"]
+
     def _get_gen_batch(self, batch: DataProto) -> DataProto:
         """Prepare generation batch without conflicting prompt tensors.
 
@@ -314,6 +323,7 @@ class RayPPOTrainer(RayPPOTrainerBase):
             non_tensor_batch_keys=list(non_tensor_batch_keys_to_pop),
         )
         gen_batch.non_tensor_batch.update(batch.non_tensor_batch)
+        self._ensure_reward_routing_keys(gen_batch)
         return gen_batch
 
     def _validate(self):
@@ -363,6 +373,7 @@ class RayPPOTrainer(RayPPOTrainerBase):
             for key in ("source", "data_source", "reward_model", "extra_info", "uid"):
                 if key in test_batch.non_tensor_batch and key not in test_gen_batch.non_tensor_batch:
                     test_gen_batch.non_tensor_batch[key] = test_batch.non_tensor_batch[key]
+            self._ensure_reward_routing_keys(test_gen_batch)
 
             meta_info = {
                 "eos_token_id": self.tokenizer.eos_token_id,
