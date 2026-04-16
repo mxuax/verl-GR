@@ -1,16 +1,4 @@
-"""Integration boundary for runtime bridges added in later phases."""
+"""Integration package for external runtime helper boundaries."""
 
-from verl_gr.integrations.runtime_adapter import TaskRuntime
-from verl_gr.integrations.verl import (
-    RLRuntimeConfig,
-    RuntimeTrainerHandle,
-    VerlRLRuntime,
-)
-
-__all__ = [
-    "TaskRuntime",
-    "RLRuntimeConfig",
-    "RuntimeTrainerHandle",
-    "VerlRLRuntime",
-]
+__all__: list[str] = []
 
