@@ -7,16 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERL_GR_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${VERL_GR_ROOT}/.." && pwd)"
-
-# openonerec data paths only, not for code importing
-OPENONEREC_ROOT="${OPENONEREC_ROOT:-${PROJECT_ROOT}/OpenOneRec}"
-OPENONEREC_VERL_RL="${OPENONEREC_ROOT}/verl_rl"
-LOCAL_OPENONEREC_RECIPE_ROOT="${VERL_GR_ROOT}/verl_gr/recipes/openonerec"
-
-if [[ ! -d "${LOCAL_OPENONEREC_RECIPE_ROOT}" ]]; then
-  echo "Local OpenOneRec recipe root not found: ${LOCAL_OPENONEREC_RECIPE_ROOT}" >&2
-  exit 1
-fi
+OPENONEREC_RECIPE_PATH="${PROJECT_ROOT}/verl-GR/verl_gr/recipes/openonerec/onerec_recipe.py"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python"
@@ -32,6 +23,7 @@ if [[ -z "${N_NODES}" || -z "${N_GPUS}" || "${N_NODES}" == "0" ]]; then
 fi
 
 BASE_MODEL="${BASE_MODEL:-/path/to/your/model}"
+BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 ROLLOUT_TP_SIZE="${ROLLOUT_TP_SIZE:-1}"
 VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
@@ -65,13 +57,13 @@ ENABLE_THINK="${ENABLE_THINK:-False}"
 ENABLE_NONTHINK="${ENABLE_NONTHINK:-False}"
 USE_FORCE_PREFIX="${USE_FORCE_PREFIX:-False}"
 
-DATA_DIR="${DATA_DIR:-${OPENONEREC_VERL_RL}/output/rl_data}"
+DATA_DIR=output/rl_data
 TRAIN_FILES="${TRAIN_FILES:-[${DATA_DIR}/train.parquet]}"
 VAL_FILES="${VAL_FILES:-[${DATA_DIR}/test.parquet]}"
 
 PROJECT_NAME="${PROJECT_NAME:-OneRec_RL}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-grpo_two_stage}"
-OUTPUT_DIR="${OUTPUT_DIR:-${VERL_GR_ROOT}/outputs/openonerec}"
+OUTPUT_DIR="${OUTPUT_DIR:-${VERL_GR_ROOT}/outputs/${BASE_MODEL_DIRNAME}}"
 WANDB_MODE="${WANDB_MODE:-offline}"
 RAY_TMPDIR="${RAY_TMPDIR:-${OUTPUT_DIR}/ray_tmp}"
 RAY_TMPDIR_FALLBACK_ROOT="${RAY_TMPDIR_FALLBACK_ROOT:-${TMPDIR:-/tmp}}"
@@ -96,7 +88,6 @@ export TMPDIR="${RAY_TMPDIR}"
 echo "==================================="
 echo "OpenOneRec GRPO (verl-GR runtime)"
 echo "==================================="
-echo "OpenOneRec data root: ${OPENONEREC_ROOT}"
 echo "Cluster: ${N_NODES} node(s) x ${N_GPUS} GPU(s)"
 echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
@@ -134,9 +125,9 @@ done
   data.max_response_length="${RESPONSE_LENGTH}" \
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.filter_overlong_prompts_workers="${FILTER_OVERLONG_PROMPTS_WORKERS}" \
-  data.custom_cls.path="${LOCAL_OPENONEREC_RECIPE_ROOT}/onerec_recipe.py" \
+  data.custom_cls.path="${OPENONEREC_RECIPE_PATH}" \
   actor_rollout_ref.model.use_remove_padding="${USE_REMOVE_PADDING}" \
-  custom_reward_function.path="${LOCAL_OPENONEREC_RECIPE_ROOT}/onerec_recipe.py" \
+  custom_reward_function.path="${OPENONEREC_RECIPE_PATH}" \
   actor_rollout_ref.actor.use_dynamic_bsz="${USE_DYNAMIC_BSZ}" \
   actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.actor.ppo_mini_batch_size="${TRAIN_BATCH_SIZE}" \

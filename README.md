@@ -11,7 +11,32 @@
 
 ## Data preparation
 
-Use the open-source OpenOneRec repo script `data/prepare_rl.sh` first to generate RL train/test parquet files in-situ.
+Data processing for reinforcement learning (RL) training. Merges multiple RL task datasets and splits them into training and test sets. Edit `prepare_rl.sh` and modify the following configuration:
+
+```bash
+REC_DATA_PATH="data/onerec_data"                  # OneRec dataset path
+OUTPUT_DIR="./output/rl_data"                     # Output directory path
+TEST_SIZE=1000                                     # Number of test samples per subtask
+SEED=42                                            # Random seed
+```
+
+The script processes the following 5 RL task datasets:
+- `sft_video_rec.parquet` - Video recommendation task
+- `sft_ad_rec.parquet` - Ad recommendation task
+- `sft_product_rec.parquet` - Product recommendation task
+- `sft_interactive_rec.parquet` - Interactive recommendation task
+- `sft_label_cond_rec.parquet` - Label-conditioned recommendation task
+
+Then run:
+
+```bash
+cd verl_gr/recipes/openonerec
+bash prepare_rl.sh
+```
+
+Output:
+- `./output/rl_data/train.parquet` - Training set (remaining data after merging all tasks)
+- `./output/rl_data/test.parquet` - Test set (1000 samples randomly sampled from merged data)
 
 ## Launching Guide
 
@@ -26,7 +51,6 @@ pip install -r requirements.txt
 
 ```bash
 cd verl-GR
-export OPENONEREC_ROOT=/path/to/OpenOneRec
 export BASE_MODEL=/path/to/your/model
 bash scripts/run_openonerec_grpo.sh
 ```
