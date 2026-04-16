@@ -74,6 +74,15 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-grpo_two_stage}"
 OUTPUT_DIR="${OUTPUT_DIR:-${VERL_GR_ROOT}/outputs/openonerec}"
 WANDB_MODE="${WANDB_MODE:-offline}"
 RAY_TMPDIR="${RAY_TMPDIR:-${OUTPUT_DIR}/ray_tmp}"
+RAY_TMPDIR_FALLBACK_ROOT="${RAY_TMPDIR_FALLBACK_ROOT:-${TMPDIR:-/tmp}}"
+RAY_TMPDIR_MAX_LEN="${RAY_TMPDIR_MAX_LEN:-60}"
+if (( ${#RAY_TMPDIR} > RAY_TMPDIR_MAX_LEN )); then
+  # Ray creates deep session/socket paths under _temp_dir. Long roots can exceed
+  # Linux AF_UNIX path limits (107 bytes), so fallback to a short root.
+  SHORT_USER="${USER:-user}"
+  RAY_TMPDIR="${RAY_TMPDIR_FALLBACK_ROOT}/vgr_ray_${SHORT_USER}"
+  echo "Warning: RAY_TMPDIR path too long, fallback to ${RAY_TMPDIR}" >&2
+fi
 RAY_SPILL_DIR="${RAY_SPILL_DIR:-${RAY_TMPDIR}/spill}"
 
 mkdir -p "${VERL_GR_ROOT}/logs" "${OUTPUT_DIR}" "${RAY_TMPDIR}" "${RAY_SPILL_DIR}"
