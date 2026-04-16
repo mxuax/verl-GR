@@ -36,7 +36,7 @@ ROLLOUT_TP_SIZE="${ROLLOUT_TP_SIZE:-1}"
 VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
-FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp2}"
+FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
 if [[ "${FSDP_STRATEGY}" == "fsdp2" ]]; then
   # For verl 0.7.1 + fsdp2, the non-fused actor path can hit inplace-view
   # autograd errors (logits.div_). Prefer fused kernels with torch backend.
@@ -149,8 +149,8 @@ done
   trainer.default_local_dir="${OUTPUT_DIR}/ckpt" \
   trainer.logger='[tensorboard]' \
   trainer.remove_previous_ckpt_in_save=True \
-  ray_kwargs.ray_init._temp_dir="${RAY_TMPDIR}" \
-  ray_kwargs.ray_init.object_spilling_directory="${RAY_SPILL_DIR}" \
+  +ray_kwargs.ray_init._temp_dir="${RAY_TMPDIR}" \
+  +ray_kwargs.ray_init.object_spilling_directory="${RAY_SPILL_DIR}" \
   global_profiler.tool="${GLOBAL_PROFILER_TOOL:-null}" \
   global_profiler.steps="${GLOBAL_PROFILER_STEPS:-null}" \
   global_profiler.profile_continuous_steps="${GLOBAL_PROFILE_CONTINUOUS_STEPS:-False}" \
