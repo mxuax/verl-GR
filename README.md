@@ -15,7 +15,7 @@ Data processing for reinforcement learning (RL) training. Merges multiple RL tas
 
 ```bash
 REC_DATA_PATH="data/onerec_data"                  # OneRec dataset path
-OUTPUT_DIR="./output/rl_data"                     # Output directory path
+OUTPUT_DIR="./output/rl_data"                     # Output directory path, default to be under VERL_GR_ROOT
 TEST_SIZE=1000                                     # Number of test samples per subtask
 SEED=42                                            # Random seed
 ```
@@ -30,8 +30,7 @@ The script processes the following 5 RL task datasets:
 Then run:
 
 ```bash
-cd verl_gr/recipes/openonerec
-bash prepare_rl.sh
+bash verl_gr/recipes/openonerec/prepare_rl.sh
 ```
 
 Output:

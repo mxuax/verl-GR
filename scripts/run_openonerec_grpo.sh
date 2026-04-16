@@ -4,9 +4,9 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERL_GR_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PROJECT_ROOT="$(cd "${VERL_GR_ROOT}/.." && pwd)"
+SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+VERL_GR_ROOT="$(dirname "${SCRIPT_DIR}")"
+PROJECT_ROOT="$(dirname "${VERL_GR_ROOT}")"
 OPENONEREC_RECIPE_PATH="${PROJECT_ROOT}/verl-GR/verl_gr/recipes/openonerec/onerec_recipe.py"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
@@ -57,7 +57,7 @@ ENABLE_THINK="${ENABLE_THINK:-False}"
 ENABLE_NONTHINK="${ENABLE_NONTHINK:-False}"
 USE_FORCE_PREFIX="${USE_FORCE_PREFIX:-False}"
 
-DATA_DIR=output/rl_data
+DATA_DIR="${VERL_GR_ROOT}/output/rl_data"
 TRAIN_FILES="${TRAIN_FILES:-[${DATA_DIR}/train.parquet]}"
 VAL_FILES="${VAL_FILES:-[${DATA_DIR}/test.parquet]}"
 
