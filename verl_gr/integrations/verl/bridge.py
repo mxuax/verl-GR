@@ -1,4 +1,4 @@
-"""Bridge helpers that isolate verl imports for OpenOneRec recipes."""
+"""Bridge helpers that isolate verl imports for task runtimes."""
 
 from __future__ import annotations
 

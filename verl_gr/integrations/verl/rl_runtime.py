@@ -16,7 +16,7 @@ class RLRuntimeConfig:
 
     trainer_entrypoint: str = "verl_gr.trainers.main_ppo"
     ray_runtime_env: str = "ppo_default"
-    checkpoint_root: Path = Path("outputs/openonerec/rl")
+    checkpoint_root: Path = Path("outputs/rl")
     dry_run: bool = True
 
 

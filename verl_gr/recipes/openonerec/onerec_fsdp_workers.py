@@ -5,7 +5,7 @@ from importlib import import_module
 from typing import Any
 
 import torch
-from verl_gr.integrations.verl.openonerec_bridge import (
+from verl_gr.integrations.verl.bridge import (
     get_actor_rollout_ref_worker,
     get_copy_to_local,
     get_device_name,
@@ -70,9 +70,9 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         copy_to_local = get_copy_to_local()
         init_device_mesh = getattr(import_module("torch.distributed.device_mesh"), "init_device_mesh")
         device_name_fn = get_device_name()
-        OneRecvLLMRollout = getattr(
-            import_module("verl_gr.components.rollout.onerec_vllm_rollout"),
-            "OneRecvLLMRollout",
+        TwoStagevLLMRollout = getattr(
+            import_module("verl_gr.components.rollout.two_stage_vllm_rollout"),
+            "TwoStagevLLMRollout",
         )
 
         infer_tp = self.config.rollout.tensor_model_parallel_size
@@ -91,7 +91,7 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
             else {}
         )
 
-        rollout = OneRecvLLMRollout(
+        rollout = TwoStagevLLMRollout(
             model_path=local_path,
             config=self.config.rollout,
             tokenizer=self.tokenizer,

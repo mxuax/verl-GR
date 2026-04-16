@@ -10,12 +10,97 @@ defaults:
   - ppo_trainer
   - _self_
 
-# ---------- GRPO-specific overrides ----------
+# ---------- OpenOneRec GRPO defaults ----------
+
+data:
+  max_prompt_length: 10240
+  prompt_key: prompt
+  shuffle: true
+  max_response_length: 2048
+  filter_overlong_prompts: true
+  filter_overlong_prompts_workers: 16
+  truncation: error
+  custom_cls:
+    name: OneRecDataset
+  reward_fn_key: source
+  enable_think: false
+  enable_nonthink: false
+  use_force_prefix: false
+  data_source_key: source
+
+custom_reward_function:
+  name: compute_score
 
 actor_rollout_ref:
   hybrid_engine: true
+
+  ref:
+    entropy_from_logits_with_chunking: true
+    fsdp_config:
+      wrap_policy:
+        transformer_layer_cls_to_wrap:
+          - Qwen3DecoderLayer
+      model_dtype: bfloat16
+    profiler:
+      enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
+      all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
+      ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
+
+  actor:
+    entropy_checkpointing: true
+    clip_ratio_high: 0.28
+    use_dynamic_bsz: true
+    ppo_mini_batch_size: 8
+    ppo_max_token_len_per_gpu: 40960
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    optim:
+      lr: 2e-6
+      lr_warmup_steps: 10
+      weight_decay: 0.1
+    fsdp_config:
+      wrap_policy:
+        transformer_layer_cls_to_wrap:
+          - Qwen3DecoderLayer
+      model_dtype: bfloat16
+    profiler:
+      enable: false
+      all_ranks: false
+      ranks: [0]
+
   rollout:
+    name: vllm
+    n: 1
+    dtype: bfloat16
+    tensor_model_parallel_size: 1
+    temperature: 1.0
+    top_p: 1.0
+    do_sample: true
+    gpu_memory_utilization: 0.6
+    max_num_batched_tokens: 40960
+    max_num_seqs: 2048
+    log_prob_max_token_len_per_gpu: 40960
+    enable_chunked_prefill: true
+    calculate_log_probs: false
     layered_summon: false
+    agent:
+      num_workers: 8
+    engine_kwargs:
+      vllm:
+        max_logprobs: 320
+    profiler:
+      enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
+      all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
+      ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
+
+  model:
+    enable_activation_offload: true
+    enable_gradient_checkpointing: true
+    use_remove_padding: false
+    use_fused_kernels: false
+    fused_kernel_options:
+      impl_backend: torch
 
 algorithm:
   adv_estimator: grpo
@@ -26,9 +111,47 @@ trainer:
   project_name: OneRec_RL
   experiment_name: grpo_two_stage
   val_before_train: true
+  default_hdfs_dir: null
+  logger: [tensorboard]
+  remove_previous_ckpt_in_save: true
+  save_freq: 50
+  test_freq: 50
+  total_epochs: 20
+  nnodes: 1
+  n_gpus_per_node: 8
+
+critic:
+  enable: false
+  profiler:
+    enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
+    all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
+    ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
+
+# ---------- Profiling ----------
+# Align with VERL profiler architecture:
+# global_profiler controls tool/steps/save path, and role-level profiler
+# controls which ranks/roles are enabled.
+global_profiler:
+  tool: null
+  steps: null
+  profile_continuous_steps: false
+  save_path: outputs/profile/openonerec
+  global_tool_config:
+    nsys:
+      discrete: false
+      controller_nsight_options:
+        trace: "cuda,nvtx,cublas,ucx"
+        cuda-memory-usage: "true"
+        cuda-graph-trace: "graph"
+      worker_nsight_options:
+        trace: "cuda,nvtx,cublas,ucx"
+        cuda-memory-usage: "true"
+        cuda-graph-trace: "graph"
+        capture-range: "cudaProfilerApi"
+        capture-range-end: null
+        kill: none
 
 # ray_kwargs.ray_init is consumed by main_ppo.run_ppo in verl>=0.7.1.
-# Keep ray_init shim for local overrides that still rely on older scripts.
 ray_init:
   num_cpus: null
   timeline_json_file: null

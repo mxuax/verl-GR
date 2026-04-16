@@ -1,15 +1,15 @@
-"""OneRec two-stage vLLM rollout implementation."""
+"""Generic two-stage vLLM rollout implementation."""
 
 from importlib import import_module
 
 import numpy as np
 import torch
-from verl_gr.integrations.verl.openonerec_bridge import (
+from verl_gr.integrations.verl.bridge import (
     get_data_proto_cls,
     get_torch_functional_module,
     get_vllm_rollout_spmd_symbols,
 )
-from verl_gr.integrations.vllm.openonerec_bridge import (
+from verl_gr.integrations.vllm.bridge import (
     get_beam_search_params_cls_or_none,
     get_lora_request_cls,
     get_sampling_params_cls,
@@ -28,7 +28,7 @@ pad_2d_list_to_length = getattr(torch_functional, "pad_2d_list_to_length")
 BeamSearchParams = get_beam_search_params_cls_or_none()
 
 
-class OneRecvLLMRollout(vLLMRollout):
+class TwoStagevLLMRollout(vLLMRollout):
     """Two-stage generation: sample CoT then beam-search items."""
 
     @torch.no_grad()
@@ -113,7 +113,7 @@ class OneRecvLLMRollout(vLLMRollout):
             kwargs.get("stage2_num_tokens", getattr(self.config, "stage2_num_tokens", 16)),
         )
         if BeamSearchParams is None:
-            raise ImportError("BeamSearchParams not available; cannot run OneRec stage-2 beam search.")
+            raise ImportError("BeamSearchParams not available; cannot run stage-2 beam search.")
 
         beam_params = BeamSearchParams(beam_width=beam_width, max_tokens=max_tokens_item)
         item_outputs = self.inference_engine.beam_search(prompts=stage2_inputs, params=beam_params)

@@ -1,4 +1,4 @@
-"""Bridge helpers that isolate vllm imports for OpenOneRec recipes."""
+"""Bridge helpers that isolate vLLM imports for task runtimes."""
 
 from __future__ import annotations
 
