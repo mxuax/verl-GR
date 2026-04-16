@@ -1,0 +1,5 @@
+# 1. follow https://github.com/verl-project/verl/blob/v0.7.1/scripts/install_vllm_sglang_mcore.sh to install all other pkgs such as flash_attn
+# 2. manually install version-specified pkgs as follows, otherwise crash
+numpy<=2.2.6
+transformers==4.57.3  # vllm 0.11.x tokenizer compatibility (avoid transformers 5.x)
+verl==0.7.1  # latest as of apr

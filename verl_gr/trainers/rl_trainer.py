@@ -1,11 +1,7 @@
-"""RL trainer extensions for verl-GR."""
+"""RL trainer extensions for verl-GR with bridged ray-trainer API."""
 
 from importlib import import_module
 
-
-# -----------------------------
-# OneRec custom ray-trainer API
-# -----------------------------
 ray_trainer_mod = import_module("verl.trainer.ppo.ray_trainer")
 core_algos = import_module("verl.trainer.ppo.core_algos")
 torch_functional = import_module("verl.utils.torch_functional")
@@ -97,7 +93,7 @@ def compute_advantage(
 
 
 class RLTrainer(RayPPOTrainerBase):
-    """RayPPOTrainer override with shared OpenOneRec helpers."""
+    """RayPPOTrainer override with different workload helpers."""
 
     @staticmethod
     def _ensure_reward_routing_keys(proto: DataProto) -> None:

@@ -1,2 +1,0 @@
-# follow https://github.com/verl-project/verl/blob/v0.7.1/scripts/install_vllm_sglang_mcore.sh to install all other pkgs such as flash_attn
-verl==0.7.1  # latest as of apr
