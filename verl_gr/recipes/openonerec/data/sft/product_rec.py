@@ -179,7 +179,7 @@ def main():
 
     # 5. Save results
     df_train = pd.DataFrame(results)
-    train_path = output_dir / 'sft_product_rec_train.parquet'
+    train_path = output_dir / 'train.parquet'
     df_train.to_parquet(train_path, index=False)
 
     print(f"Saved: {train_path} ({len(df_train):,} rows)")

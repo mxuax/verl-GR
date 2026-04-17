@@ -25,7 +25,7 @@ RUN_SFT_PRODUCT_REC=1
 
 # ============== Configuration ==============
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RECIF_DIR=""
+RECIF_DIR=/data/models/fredhong/hf_home/OpenOneRec-RecIF
 
 INPUT_METADATA="${RECIF_DIR}/onerec_bench_release.parquet"
 PID2SID_MAPPING="${RECIF_DIR}/video_ad_pid2sid.parquet"
@@ -44,15 +44,13 @@ run_task() {
     local extra_args="$@"
 
     local output_file="${OUTPUT_BASE_DIR}/${task_type}_${task_name}.parquet"
-    local temp_dir=$(mktemp -d)
 
     echo "  Output: ${output_file}"
-    python3 "${script_path}" --output_dir "${temp_dir}" ${extra_args}
+    python3 "${script_path}" --output_dir "${OUTPUT_BASE_DIR}" ${extra_args}
 
-    if [ -f "${temp_dir}/train.parquet" ]; then
-        mv "${temp_dir}/train.parquet" "${output_file}"
+    if [ -f "${OUTPUT_BASE_DIR}/train.parquet" ]; then
+        mv "${OUTPUT_BASE_DIR}/train.parquet" "${output_file}"
     fi
-    rm -rf "${temp_dir}"
 }
 
 # ============== Main ==============

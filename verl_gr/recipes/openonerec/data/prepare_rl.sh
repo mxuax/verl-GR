@@ -11,7 +11,7 @@ REC_DATA_PATH="../output"
 # Tasks that RL depends on
 # VIDEO_REC=${REC_DATA_PATH}/sft_video_rec.parquet
 # AD_REC=${REC_DATA_PATH}/sft_ad_rec.parquet
-PRODUCT_REC=${REC_DATA_PATH}/sft_product_rec_train.parquet
+PRODUCT_REC=${REC_DATA_PATH}/sft_product_rec.parquet
 # INTERACTIVE_REC=${REC_DATA_PATH}/sft_interactive_rec.parquet
 # LABEL_COND_REC=${REC_DATA_PATH}/sft_label_cond_rec.parquet
 
