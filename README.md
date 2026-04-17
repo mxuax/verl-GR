@@ -11,31 +11,29 @@
 
 ## Data preparation
 
-Data processing for reinforcement learning (RL) training. Merges multiple RL task datasets and splits them into training and test sets. Edit `prepare_rl.sh` and modify the following configuration:
+You will need to download `OpenOneRec/OpenOneRec-RecIF` first and then curate the RL data one-stop as follows.
 
-```bash
-REC_DATA_PATH="data/onerec_data"                  # OneRec dataset path
-OUTPUT_DIR="./output/rl_data"                     # Output directory path, default to be under VERL_GR_ROOT
-TEST_SIZE=1000                                     # Number of test samples per subtask
-SEED=42                                            # Random seed
+```
+OpenOneRec-RecIF -> Recommendataion data preprocessing -> RL data split
 ```
 
-The script processes the following 5 RL task datasets:
-- `sft_video_rec.parquet` - Video recommendation task
-- `sft_ad_rec.parquet` - Ad recommendation task
-- `sft_product_rec.parquet` - Product recommendation task
-- `sft_interactive_rec.parquet` - Interactive recommendation task
-- `sft_label_cond_rec.parquet` - Label-conditioned recommendation task
+Patch `verl_gr/recipes/openonerec/data/recif_preprocessing.sh` as below:
+
+```bash
+RECIF_DIR=YOUR/RECIF/DIR
+```
 
 Then run:
 
 ```bash
-bash verl_gr/recipes/openonerec/prepare_rl.sh
+cd verl_gr/recipes/openonerec
+bash recif_preprocessing.sh
+bash prepare_rl.sh
 ```
 
 Output:
-- `./output/rl_data/train.parquet` - Training set (remaining data after merging all tasks)
-- `./output/rl_data/test.parquet` - Test set (1000 samples randomly sampled from merged data)
+- `verl_gr/recipes/openonerec/output/rl_data/train.parquet` - Training set (remaining data after merging all tasks)
+- `verl_gr/recipes/openonerec/output/rl_data/test.parquet` - Test set (1000 samples randomly sampled from merged data)
 
 ## Launching Guide
 
