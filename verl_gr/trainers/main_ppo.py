@@ -1,35 +1,21 @@
 """Local PPO entrypoint with customize verl-gr trainer."""
 
 import os
-from importlib import import_module
 from pathlib import Path
 
-from verl_gr.integrations.verl.bridge import (
-    get_ppo_runtime_symbols,
-)
+import hydra
+import ray
+from omegaconf import OmegaConf
+
+from verl.trainer.main_ppo import auto_set_device, create_rl_dataset, create_rl_sampler, migrate_legacy_reward_impl, run_ppo as base_run_ppo
+from verl.utils.dataset.rl_dataset import collate_fn
 from verl_gr.recipes.openonerec.onerec_recipe import OneRecTask
+from verl_gr.trainers.rl_trainer import RLTrainer, ResourcePoolManager, Role
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr" / "openonerec"
 
 
 def _build_main():
-    hydra = import_module("hydra")
-    ray = import_module("ray")
-    OmegaConf = getattr(import_module("omegaconf"), "OmegaConf")
-    runtime_symbols = get_ppo_runtime_symbols()
-    base_run_ppo = runtime_symbols["run_ppo"]
-    create_rl_dataset = runtime_symbols["create_rl_dataset"]
-    create_rl_sampler = runtime_symbols["create_rl_sampler"]
-    auto_set_device = runtime_symbols["auto_set_device"]
-    migrate_legacy_reward_impl = runtime_symbols["migrate_legacy_reward_impl"]
-    collate_fn = runtime_symbols["collate_fn"]
-
-    # Import trainer symbols lazily to avoid importing heavy verl stack
-    # during module import/inspection time.
-    rl_trainer_mod = import_module("verl_gr.trainers.rl_trainer")
-    Role = getattr(rl_trainer_mod, "Role")
-    ResourcePoolManager = getattr(rl_trainer_mod, "ResourcePoolManager")
-    RLTrainer = getattr(rl_trainer_mod, "RLTrainer")
     task_impl = OneRecTask()
 
     @ray.remote(num_cpus=1)
@@ -37,7 +23,7 @@ def _build_main():
         def run(self, config):
             task_impl.sanitize_fsdp2_wrap_policy(config)
             OmegaConf.resolve(config)
-            prepared = task_impl.prepare(config, runtime_symbols=runtime_symbols)
+            prepared = task_impl.prepare(config)
             tokenizer = prepared["tokenizer"]
             processor = prepared["processor"]
             actor_rollout_cls = prepared["actor_rollout_cls"]

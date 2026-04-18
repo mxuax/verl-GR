@@ -13,28 +13,29 @@ import torch
 from omegaconf import DictConfig, ListConfig
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
-from verl_gr.components.tokenization.sid_tokenizer import build_hf_tokenizer_and_processor
-from verl_gr.integrations.verl.bridge import (
-    get_async_actor_rollout_ref_worker,
-    get_compute_position_id_with_mask,
-    get_copy_to_local,
-    get_critic_worker,
-    get_fsdp_reward_model_worker,
-    get_megatron_ray_worker_group,
-    get_megatron_reward_model_worker,
-    get_megatron_worker_symbols,
-    get_process_image_video,
-    get_qwen2_vl_rope_index,
-    get_ray_worker_group,
-    get_torch_functional_module,
-)
+import verl.utils.torch_functional as verl_F
+from verl.single_controller.ray import RayWorkerGroup
+from verl.utils import hf_processor, hf_tokenizer
+from verl.utils.dataset.vision_utils import process_image, process_video
+from verl.utils.fs import copy_to_local
+from verl.utils.model import compute_position_id_with_mask
+from verl.workers.fsdp_workers import AsyncActorRolloutRefWorker
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["collate_fn", "OneRecDataset", "compute_score"]
 
-verl_F = get_torch_functional_module()
-compute_position_id_with_mask = get_compute_position_id_with_mask()
+
+def build_hf_tokenizer_and_processor(
+    model_path: str,
+    *,
+    trust_remote_code: bool,
+) -> tuple[Any, Any]:
+    """Build HuggingFace tokenizer and processor for OpenOneRec paths."""
+
+    tokenizer = hf_tokenizer(model_path, trust_remote_code=trust_remote_code)
+    processor = hf_processor(model_path, trust_remote_code=trust_remote_code, use_fast=True)
+    return tokenizer, processor
 
 
 def collate_fn(samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -106,8 +107,6 @@ class OneRecDataset(Dataset):
         self._read_files_and_tokenize()
 
     def _download(self, use_origin_parquet: bool = False) -> None:
-        copy_to_local = get_copy_to_local()
-
         target_files = self.original_data_files if use_origin_parquet else self.data_files
         for idx, parquet_file in enumerate(target_files):
             local_path = copy_to_local(src=parquet_file, cache_dir=self.cache_dir, use_shm=self.use_shm)
@@ -187,8 +186,6 @@ class OneRecDataset(Dataset):
         video_key = self.video_key
 
         if processor is not None:
-            process_image, process_video = get_process_image_video()
-
             def doc_length(doc: dict[str, Any]) -> int:
                 messages = self._build_messages(dict(doc))
                 raw_prompt = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -250,8 +247,6 @@ class OneRecDataset(Dataset):
         model_inputs: dict[str, Any] = {}
 
         if self.processor is not None:
-            process_image, process_video = get_process_image_video()
-
             raw_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
             if self.use_force_prefix:
                 raw_prompt = raw_prompt + self._FORCE_PREFIX_CONTENT
@@ -296,7 +291,7 @@ class OneRecDataset(Dataset):
             and hasattr(self.processor, "image_processor")
             and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__
         ):
-            get_rope_index = get_qwen2_vl_rope_index()
+            from verl.models.transformers.qwen2_vl import get_rope_index
 
             position_ids = [
                 get_rope_index(
@@ -414,9 +409,8 @@ class OneRecTask:
             return legacy_cfg
         return None
 
-    def prepare(self, config, runtime_symbols: dict[str, Any]) -> dict[str, Any]:
+    def prepare(self, config) -> dict[str, Any]:
         reward_model_cfg = self.get_reward_model_cfg(config)
-        copy_to_local = get_copy_to_local()
         local_path = copy_to_local(
             config.actor_rollout_ref.model.path,
             use_shm=config.actor_rollout_ref.model.get("use_shm", False),
@@ -425,30 +419,43 @@ class OneRecTask:
         tokenizer, processor = build_hf_tokenizer_and_processor(
             local_path,
             trust_remote_code=trust_remote_code,
-            hf_tokenizer_loader=runtime_symbols["hf_tokenizer"],
-            hf_processor_loader=runtime_symbols["hf_processor"],
         )
 
         if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
-            ray_worker_group_cls = get_ray_worker_group()
+            ray_worker_group_cls = RayWorkerGroup
             one_rec_actor_rollout_ref_worker = getattr(
                 import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
                 "OneRecActorRolloutRefWorker",
             )
-            async_actor_rollout_ref_worker = get_async_actor_rollout_ref_worker()
+            async_actor_rollout_ref_worker = AsyncActorRolloutRefWorker
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
-            critic_worker = get_critic_worker(use_legacy_worker_impl)
+            if use_legacy_worker_impl in {"auto", "enable"}:
+                from verl.workers.fsdp_workers import CriticWorker
+            elif use_legacy_worker_impl == "disable":
+                from verl.workers.engine_workers import TrainingWorker as CriticWorker
+            else:
+                raise ValueError(f"Invalid use_legacy_worker_impl: {use_legacy_worker_impl}")
+            critic_worker = CriticWorker
             actor_rollout_cls = (
                 async_actor_rollout_ref_worker
                 if config.actor_rollout_ref.rollout.mode == "async"
                 else one_rec_actor_rollout_ref_worker
             )
         elif config.actor_rollout_ref.actor.strategy == "megatron":
-            ray_worker_group_cls = get_megatron_ray_worker_group()
-            megatron_workers = get_megatron_worker_symbols()
-            actor_rollout_ref_worker = megatron_workers["ActorRolloutRefWorker"]
-            async_actor_rollout_ref_worker = megatron_workers["AsyncActorRolloutRefWorker"]
-            critic_worker = megatron_workers["CriticWorker"]
+            from verl.workers.megatron_workers import (
+                ActorRolloutRefWorker as MegatronActorRolloutRefWorker,
+                AsyncActorRolloutRefWorker as MegatronAsyncActorRolloutRefWorker,
+                CriticWorker as MegatronCriticWorker,
+            )
+
+            try:
+                from verl.single_controller.ray.megatron import NVMegatronRayWorkerGroup
+            except ModuleNotFoundError:
+                NVMegatronRayWorkerGroup = RayWorkerGroup
+            ray_worker_group_cls = NVMegatronRayWorkerGroup
+            actor_rollout_ref_worker = MegatronActorRolloutRefWorker
+            async_actor_rollout_ref_worker = MegatronAsyncActorRolloutRefWorker
+            critic_worker = MegatronCriticWorker
             actor_rollout_cls = (
                 async_actor_rollout_ref_worker
                 if config.actor_rollout_ref.rollout.mode == "async"
@@ -460,9 +467,13 @@ class OneRecTask:
         reward_model_worker = None
         if reward_model_cfg is not None and reward_model_cfg.get("enable", False):
             if reward_model_cfg.strategy in {"fsdp", "fsdp2"}:
-                reward_model_worker = get_fsdp_reward_model_worker()
+                from verl.workers.fsdp_workers import RewardModelWorker
+
+                reward_model_worker = RewardModelWorker
             elif reward_model_cfg.strategy == "megatron":
-                reward_model_worker = get_megatron_reward_model_worker()
+                from verl.workers.megatron_workers import RewardModelWorker as MegatronRewardModelWorker
+
+                reward_model_worker = MegatronRewardModelWorker
             else:
                 raise NotImplementedError(f"Unknown reward model strategy: {reward_model_cfg.strategy}")
 

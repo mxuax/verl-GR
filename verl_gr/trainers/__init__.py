@@ -1,4 +1,2 @@
-"""Trainer skeletons for verl-GR."""
-
-"""Trainer skeletons for verl-GR."""
+"""Trainer-side extensions built on top of upstream verl."""
 
