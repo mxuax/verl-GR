@@ -1,19 +1,16 @@
 """RL trainer extensions for verl-GR with bridged ray-trainer API."""
 
-from importlib import import_module
+import torch
 
-ray_trainer_mod = import_module("verl.trainer.ppo.ray_trainer")
-core_algos = import_module("verl.trainer.ppo.core_algos")
-torch_functional = import_module("verl.utils.torch_functional")
-DataProto = getattr(import_module("verl"), "DataProto")
-torch = import_module("torch")
+from verl import DataProto
+from verl.trainer.ppo import core_algos
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase
+from verl.trainer.ppo.ray_trainer import Role, ResourcePoolManager
+from verl.utils.torch_functional import masked_mean
 
-Role = getattr(ray_trainer_mod, "Role")
-ResourcePoolManager = getattr(ray_trainer_mod, "ResourcePoolManager")
+from verl_gr.recipes.openonerec.onerec_trainer import openonerec_validate
+
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
-
-masked_mean = getattr(torch_functional, "masked_mean")
-RayPPOTrainerBase = getattr(ray_trainer_mod, "RayPPOTrainer")
 
 
 def apply_kl_penalty(data: DataProto, kl_ctrl, kl_penalty: str = "kl"):
@@ -126,6 +123,5 @@ class RLTrainer(RayPPOTrainerBase):
         return gen_batch
 
     def _validate(self):
-        onerec_trainer_mod = import_module("verl_gr.recipes.openonerec.onerec_trainer")
-        return onerec_trainer_mod.openonerec_validate(self)
+        return openonerec_validate(self)
 

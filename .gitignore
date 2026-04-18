@@ -1,4 +1,5 @@
 # IDE
+.cursor/
 .idea/
 .vscode/
 .claude/
@@ -50,7 +51,12 @@ outputs/
 
 # Testing
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .nox/

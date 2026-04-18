@@ -1,17 +1,20 @@
 # verl-GR
 
-
 ## Source Code Overview
 
-- `contracts/`: shared schemas and interfaces for samples, objectives, artifacts, tokenizers, and RL/SFT/eval stages.
-- `components/`: reusable runtime pieces such as tokenization helpers, evaluation metrics, and two-stage rollout logic.
-- `integrations/`: adapters/bridges to external runtimes (`verl`, `vllm`) and training orchestration glue.
-- `recipes/`: task-specific recipe implementations and registry (for example, OpenOneRec reward/data logic).
-- `trainers/`: trainer entrypoints and wrappers (`main_ppo.py`, RL/SFT/distill trainer skeletons).
+- `verl_gr/recipes/`: task-specific implementations and data/reward logic (for example, OpenOneRec runtime preparation and workers).
+- `verl_gr/trainers/`: trainer-side wrappers around upstream `verl` trainer code.
+- `verl_gr/workers/`: rollout-side extensions that are still useful outside a single recipe.
+- `verl_gr/third_party/`: small compatibility helpers for non-`verl` dependencies such as `vllm`.
+
+## Docs
+
+- `docs/verl_gr/openonerec_mapping.md`: maps legacy OpenOneRec runtime modules to the current `verl_gr` layout.
+- `docs/verl_gr/openonerec_parity_plan.md`: tracks the current Phase B parity/smoke checklist after the cleanup refactor.
 
 ## Data preparation
 
-You will need to download `OpenOneRec/OpenOneRec-RecIF` first and then curate the RL data one-stop as follows. The flow is `OpenOneRec-RecIF -> Recommendataion data preprocessing -> RL data split`. Patch `verl-GR/verl_gr/recipes/openonerec/data/recif_preprocessing.sh` on your own before get started.
+You will need to download `OpenOneRec/OpenOneRec-RecIF` first and then curate the RL data one-stop as follows. The flow is `OpenOneRec-RecIF -> recommendation data preprocessing -> RL data split`. Patch `verl-GR/verl_gr/recipes/openonerec/data/recif_preprocessing.sh` before getting started.
 
 ```bash
 RECIF_DIR=/YOUR/RECIF/DIR

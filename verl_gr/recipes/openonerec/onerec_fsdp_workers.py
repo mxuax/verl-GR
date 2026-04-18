@@ -5,21 +5,15 @@ from importlib import import_module
 from typing import Any
 
 import torch
-from verl_gr.integrations.verl.bridge import (
-    get_actor_rollout_ref_worker,
-    get_copy_to_local,
-    get_device_name,
-    get_fsdp_vllm_sharding_manager,
-    get_log_gpu_memory_usage,
-)
+from torch.distributed.device_mesh import init_device_mesh
+
+from verl.utils.device import get_device_name
+from verl.utils.fs import copy_to_local
+from verl.utils.profiler import log_gpu_memory_usage
+from verl.workers.fsdp_workers import ActorRolloutRefWorker
+from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
 
 logger = logging.getLogger(__name__)
-
-try:
-    ActorRolloutRefWorker = get_actor_rollout_ref_worker()
-except Exception:  # pragma: no cover - fallback when verl isn't installed
-    ActorRolloutRefWorker = object
-
 
 class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
     """Actor worker that swaps in OneRec two-stage vLLM rollout."""
@@ -65,13 +59,8 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
             logger.warning("OneRec two-stage rollout currently supports sync mode only; using base async rollout.")
             return super()._build_rollout(trust_remote_code)
 
-        FSDPVLLMShardingManager = get_fsdp_vllm_sharding_manager()
-        log_gpu_memory_usage = get_log_gpu_memory_usage()
-        copy_to_local = get_copy_to_local()
-        init_device_mesh = getattr(import_module("torch.distributed.device_mesh"), "init_device_mesh")
-        device_name_fn = get_device_name()
         TwoStagevLLMRollout = getattr(
-            import_module("verl_gr.components.rollout.two_stage_vllm_rollout"),
+            import_module("verl_gr.workers.rollout.two_stage_vllm_rollout"),
             "TwoStagevLLMRollout",
         )
 
@@ -80,7 +69,7 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         if self.world_size % infer_tp != 0:
             raise ValueError(f"rollout world_size {self.world_size} not divisible by infer_tp {infer_tp}")
 
-        device_name = device_name_fn()
+        device_name = get_device_name()
         rollout_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, infer_tp), mesh_dim_names=["dp", "infer_tp"])
 
         log_gpu_memory_usage("Before building OneRec vllm rollout", logger=logger)
