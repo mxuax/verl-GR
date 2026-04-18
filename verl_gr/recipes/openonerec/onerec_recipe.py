@@ -20,12 +20,11 @@ from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.dataset.vision_utils import process_image, process_video
 from verl.utils.fs import copy_to_local
 from verl.utils.model import compute_position_id_with_mask
-from verl.workers.fsdp_workers import AsyncActorRolloutRefWorker, RewardModelWorker
+from verl.workers.fsdp_workers import AsyncActorRolloutRefWorker
 from verl.workers.megatron_workers import (
     ActorRolloutRefWorker as MegatronActorRolloutRefWorker,
     AsyncActorRolloutRefWorker as MegatronAsyncActorRolloutRefWorker,
     CriticWorker as MegatronCriticWorker,
-    RewardModelWorker as MegatronRewardModelWorker,
 )
 
 logger = logging.getLogger(__name__)
@@ -466,8 +465,12 @@ class OneRecTask:
         reward_model_worker = None
         if reward_model_cfg is not None and reward_model_cfg.get("enable", False):
             if reward_model_cfg.strategy in {"fsdp", "fsdp2"}:
+                from verl.workers.fsdp_workers import RewardModelWorker
+
                 reward_model_worker = RewardModelWorker
             elif reward_model_cfg.strategy == "megatron":
+                from verl.workers.megatron_workers import RewardModelWorker as MegatronRewardModelWorker
+
                 reward_model_worker = MegatronRewardModelWorker
             else:
                 raise NotImplementedError(f"Unknown reward model strategy: {reward_model_cfg.strategy}")
