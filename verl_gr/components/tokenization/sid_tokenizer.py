@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Sequence
 
 from verl_gr.contracts.artifact_contract import TokenizerArtifact
 from verl_gr.contracts.sample_schema import RepresentationType
@@ -47,3 +47,18 @@ class SIDTokenizer:
             special_token_file=self.artifact_root / "special_tokens.json",
             representation_schema_file=self.artifact_root / "sid_schema.json",
         )
+
+
+def build_hf_tokenizer_and_processor(
+    model_path: str | Path,
+    *,
+    trust_remote_code: bool,
+    hf_tokenizer_loader: Callable[..., Any],
+    hf_processor_loader: Callable[..., Any],
+) -> tuple[Any, Any]:
+    """Build HuggingFace tokenizer/processor pair for SID runtime paths."""
+
+    model_path_str = str(model_path)
+    tokenizer = hf_tokenizer_loader(model_path_str, trust_remote_code=trust_remote_code)
+    processor = hf_processor_loader(model_path_str, trust_remote_code=trust_remote_code, use_fast=True)
+    return tokenizer, processor

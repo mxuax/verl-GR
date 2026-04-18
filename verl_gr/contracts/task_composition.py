@@ -40,6 +40,42 @@ class TaskComposition:
                 raise ValueError("Tokenizer must appear before RL.")
 
 
+@dataclass(frozen=True)
+class StageRuntimeSpec:
+    """Runtime entrypoint binding for a specific stage."""
+
+    stage: StageName
+    entrypoint_module: str
+    config_name: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskRuntimeComposition:
+    """Runtime-level stage bindings attached to one task composition."""
+
+    composition: TaskComposition
+    stage_runtimes: tuple[StageRuntimeSpec, ...]
+
+    def validate(self) -> None:
+        """Validate that runtime specs only target declared stages."""
+
+        self.composition.validate()
+        stage_set = set(self.composition.stages)
+        for runtime_spec in self.stage_runtimes:
+            if runtime_spec.stage not in stage_set:
+                raise ValueError(
+                    f"Runtime spec stage {runtime_spec.stage.value} is not in task composition."
+                )
+
+    def runtime_for_stage(self, stage: StageName) -> StageRuntimeSpec | None:
+        """Return runtime binding for one stage."""
+
+        for runtime_spec in self.stage_runtimes:
+            if runtime_spec.stage == stage:
+                return runtime_spec
+        return None
+
+
 def validate_compositions(compositions: Iterable[TaskComposition]) -> None:
     """Validate a collection of task compositions."""
 

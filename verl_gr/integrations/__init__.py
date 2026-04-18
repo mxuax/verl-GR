@@ -1,2 +1,4 @@
-"""Integration boundary for runtime bridges added in later phases."""
+"""Integration package for external runtime helper boundaries."""
+
+__all__: list[str] = []
 

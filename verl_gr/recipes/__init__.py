@@ -1,2 +1,2 @@
-"""Recipes package for task-level wiring."""
+"""Recipes package."""
 

@@ -43,4 +43,3 @@ class RecipeRegistry:
         """List all registered recipe names."""
 
         return tuple(sorted(self._recipes))
-
