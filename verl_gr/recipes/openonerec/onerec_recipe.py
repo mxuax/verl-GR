@@ -14,18 +14,12 @@ from omegaconf import DictConfig, ListConfig
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
 import verl.utils.torch_functional as verl_F
-from verl.models.transformers.qwen2_vl import get_rope_index
 from verl.single_controller.ray import RayWorkerGroup
 from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.dataset.vision_utils import process_image, process_video
 from verl.utils.fs import copy_to_local
 from verl.utils.model import compute_position_id_with_mask
 from verl.workers.fsdp_workers import AsyncActorRolloutRefWorker
-from verl.workers.megatron_workers import (
-    ActorRolloutRefWorker as MegatronActorRolloutRefWorker,
-    AsyncActorRolloutRefWorker as MegatronAsyncActorRolloutRefWorker,
-    CriticWorker as MegatronCriticWorker,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +291,8 @@ class OneRecDataset(Dataset):
             and hasattr(self.processor, "image_processor")
             and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__
         ):
+            from verl.models.transformers.qwen2_vl import get_rope_index
+
             position_ids = [
                 get_rope_index(
                     self.processor,
@@ -446,6 +442,12 @@ class OneRecTask:
                 else one_rec_actor_rollout_ref_worker
             )
         elif config.actor_rollout_ref.actor.strategy == "megatron":
+            from verl.workers.megatron_workers import (
+                ActorRolloutRefWorker as MegatronActorRolloutRefWorker,
+                AsyncActorRolloutRefWorker as MegatronAsyncActorRolloutRefWorker,
+                CriticWorker as MegatronCriticWorker,
+            )
+
             try:
                 from verl.single_controller.ray.megatron import NVMegatronRayWorkerGroup
             except ModuleNotFoundError:

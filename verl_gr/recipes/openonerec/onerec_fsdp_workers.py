@@ -11,7 +11,6 @@ from verl.utils.device import get_device_name
 from verl.utils.fs import copy_to_local
 from verl.utils.profiler import log_gpu_memory_usage
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
-from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +89,8 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
             **lora_kwargs,
         )
         log_gpu_memory_usage("After building OneRec vllm rollout", logger=logger)
+
+        from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
 
         full_params = torch.distributed.get_world_size() == 1
         rollout_sharding_manager = FSDPVLLMShardingManager(
