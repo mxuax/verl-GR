@@ -17,17 +17,9 @@ from verl_gr.workers.rollout.primitives import (
     prepare_prompt_token_inputs,
 )
 
-_LEGACY_SPMD_AVAILABLE = True
-try:
-    rollout_spmd_module = import_module("verl.workers.rollout.vllm_rollout.vllm_rollout_spmd")
-    vLLMRollout = getattr(rollout_spmd_module, "vLLMRollout")
-    _pre_process_inputs = getattr(rollout_spmd_module, "_pre_process_inputs")
-except ModuleNotFoundError:
-    # verl>=0.7.1 removed vLLM SPMD rollout internals (`vLLMRollout` and
-    # `_pre_process_inputs`) in favor of async server rollout.
-    _LEGACY_SPMD_AVAILABLE = False
-    vLLMRollout = getattr(import_module("verl.workers.rollout.base"), "BaseRollout")
-    _pre_process_inputs = None
+_LEGACY_SPMD_AVAILABLE = False
+vLLMRollout = getattr(import_module("verl.workers.rollout.base"), "BaseRollout")
+_pre_process_inputs = None
 
 class TwoStagevLLMRollout(vLLMRollout):
     """Generate CoT first, then beam-search item outputs."""

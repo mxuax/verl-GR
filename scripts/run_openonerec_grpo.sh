@@ -19,7 +19,7 @@ N_NODES="${N_NODES:-$(echo "${RAY_INFO}" | awk '{print $1}')}"
 N_GPUS="${N_GPUS:-$(echo "${RAY_INFO}" | awk '{print $2}')}"
 if [[ -z "${N_NODES}" || -z "${N_GPUS}" || "${N_NODES}" == "0" ]]; then
   N_NODES=1
-  N_GPUS=8
+  N_GPUS=2
 fi
 
 BASE_MODEL="${BASE_MODEL:-/path/to/your/model}"
@@ -140,6 +140,8 @@ done
   actor_rollout_ref.model.path="${BASE_MODEL}" \
   actor_rollout_ref.rollout.n="${ROLLOUT_N}" \
   actor_rollout_ref.rollout.tensor_model_parallel_size="${ROLLOUT_TP_SIZE}" \
+  ++actor_rollout_ref.rollout.mode="async" \
+  ++actor_rollout_ref.rollout.name="two_stage" \
   actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
   trainer.n_gpus_per_node="${N_GPUS}" \
   trainer.nnodes="${N_NODES}" \
