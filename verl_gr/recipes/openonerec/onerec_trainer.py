@@ -77,14 +77,16 @@ def openonerec_validate(trainer):
             "validate": True,
             "global_steps": trainer.global_steps,
         }
+        rollout_custom = rollout_config.get("custom") or {}
+
         if is_two_stage_rollout_val:
             meta_info["enable_two_stage_rollout"] = True
-            meta_info["stage1_max_tokens"] = rollout_config.get(
+            meta_info["stage1_max_tokens"] = rollout_custom.get(
                 "stage1_max_tokens",
                 trainer.config.data.get("max_response_length", 1024),
             )
-            meta_info["stage2_beam_size"] = rollout_config.get("stage2_beam_size", 32)
-            meta_info["stage2_num_tokens"] = rollout_config.get("stage2_num_tokens", 3)
+            meta_info["stage2_beam_size"] = rollout_custom.get("stage2_beam_size", 32)
+            meta_info["stage2_num_tokens"] = rollout_custom.get("stage2_num_tokens", 3)
             meta_info["max_tokens"] = trainer.config.data.get("max_response_length", 1024)
             meta_info["use_beam_search"] = False
             meta_info["n"] = val_kwargs.get("n", 1)
@@ -111,7 +113,7 @@ def openonerec_validate(trainer):
 
         if use_beam_search_val or is_two_stage_rollout_val:
             n_beams = (
-                rollout_config.get("stage2_beam_size", 2)
+                rollout_custom.get("stage2_beam_size", 2)
                 if is_two_stage_rollout_val
                 else val_kwargs.get("n", 1)
             )

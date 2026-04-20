@@ -84,6 +84,10 @@ actor_rollout_ref:
     enable_chunked_prefill: true
     calculate_log_probs: false
     layered_summon: false
+    custom:
+      stage1_max_tokens: 1024
+      stage2_num_tokens: 3
+      stage2_beam_size: 32
     agent:
       num_workers: 8
     engine_kwargs:

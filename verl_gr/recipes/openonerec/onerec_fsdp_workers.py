@@ -10,6 +10,9 @@ from torch.distributed.device_mesh import init_device_mesh
 from verl.utils.device import get_device_name
 from verl.utils.fs import copy_to_local
 from verl.utils.profiler import log_gpu_memory_usage
+from verl.single_controller.base.decorator import Dispatch, register
+from verl.utils.config import omega_conf_to_dataclass
+from verl.workers.config import HFModelConfig
 from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
 
 logger = logging.getLogger(__name__)
@@ -59,7 +62,7 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
             "TwoStagevLLMRollout",
         )
 
-        print("\n\nDEBUG: two stage used success!")
+        logger.warning("Two-stage rollout selected: %s", TwoStagevLLMRollout.__name__)
 
         infer_tp = self.config.rollout.tensor_model_parallel_size
         dp = self.world_size // infer_tp
@@ -86,62 +89,44 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
             trust_remote_code=trust_remote_code,
             **lora_kwargs,
         )
+        self.rollout = rollout
+        self.rollout_device_mesh = rollout_device_mesh
         log_gpu_memory_usage("After building OneRec vllm rollout", logger=logger)
 
-        from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
+        try:
+            from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
 
-        full_params = torch.distributed.get_world_size() == 1
-        rollout_sharding_manager = FSDPVLLMShardingManager(
-            module=self.actor_module_fsdp,
-            inference_engine=rollout.inference_engine,
-            model_config=self.actor_model_config,
-            rollout_config=self.config.rollout,
-            full_params=full_params,
-            device_mesh=rollout_device_mesh,
-            offload_param=self._is_offload_param,
-            load_format=self.config.rollout.load_format,
-            layered_summon=self.config.rollout.get("layered_summon", False),
-        )
-        log_gpu_memory_usage("After building sharding manager", logger=logger)
-        return rollout, rollout_sharding_manager
+            full_params = torch.distributed.get_world_size() == 1
+            self.rollout_sharding_manager = FSDPVLLMShardingManager(
+                module=self.actor_module_fsdp,
+                inference_engine=rollout.inference_engine,
+                model_config=self.actor_model_config,
+                rollout_config=self.config.rollout,
+                full_params=full_params,
+                device_mesh=rollout_device_mesh,
+                offload_param=self._is_offload_param,
+                load_format=self.config.rollout.load_format,
+                layered_summon=self.config.rollout.get("layered_summon", False),
+            )
+            log_gpu_memory_usage("After building sharding manager", logger=logger)
+        except ModuleNotFoundError:
+            logger.warning(
+                "FSDPVLLMShardingManager is unavailable in this verl build; "
+                "continuing with TwoStagevLLMRollout without explicit sharding manager."
+            )
+            self.rollout_sharding_manager = None
 
+        # Keep parity with upstream ActorRolloutRefWorker._build_rollout(), where
+        # rollout_mode()/update_weights rely on these lifecycle flags.
+        self.base_sync_done = "dummy" not in self.config.rollout.load_format
+        self.layered_summon = self.config.rollout.get("layered_summon", False)
 
-class OneRecAsyncActorRolloutRefWorker(AsyncActorRolloutRefWorker):
-    """Async actor worker with OneRec rollout compatibility hooks."""
+        # Upstream also stores model_config during rollout construction.
+        self.model_config = self.actor_model_config
+        return self.rollout
 
-    @staticmethod
-    def _normalize_wrap_targets(value: Any) -> Any:
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, (list, tuple, set)):
-            normalized: list[str] = []
-            for item in value:
-                if isinstance(item, str):
-                    normalized.append(item)
-                elif hasattr(item, "__name__"):
-                    normalized.append(str(item.__name__))
-                else:
-                    normalized.append(str(item))
-            return sorted(set(normalized))
-        return value
-
-    def _normalize_fsdp_wrap_policy(self, fsdp_config: Any) -> None:
-        wrap_policy = fsdp_config.get("wrap_policy", None)
-        if wrap_policy is None:
-            return
-        current = wrap_policy.get("transformer_layer_cls_to_wrap", None)
-        normalized = self._normalize_wrap_targets(current)
-        if normalized is not None:
-            wrap_policy["transformer_layer_cls_to_wrap"] = normalized
-
-    def _build_model_optimizer(self, *args, **kwargs):
-        fsdp_config = kwargs.get("fsdp_config")
-        if fsdp_config is None and len(args) >= 2:
-            fsdp_config = args[1]
-        if fsdp_config is not None:
-            self._normalize_fsdp_wrap_policy(fsdp_config)
-        return super()._build_model_optimizer(*args, **kwargs)
-
-    def _build_rollout(self, trust_remote_code: bool = False):
-        return OneRecActorRolloutRefWorker._build_rollout(self, trust_remote_code)
-
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
+    async def update_weights(self, global_steps: int = None):
+        _ = global_steps
+        await self.rollout_mode()
+        return True

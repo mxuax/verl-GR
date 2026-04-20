@@ -427,11 +427,20 @@ class OneRecTask:
                 import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
                 "OneRecActorRolloutRefWorker",
             )
-            one_rec_async_actor_rollout_ref_worker = getattr(
-                import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
-                "OneRecAsyncActorRolloutRefWorker",
-            )
+            # one_rec_async_actor_rollout_ref_worker = getattr(
+            #     import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+            #     "OneRecAsyncActorRolloutRefWorker",
+            # )
             async_actor_rollout_ref_worker = AsyncActorRolloutRefWorker
+            if config.actor_rollout_ref.rollout.get("name") == "two_stage":
+                # Agent loop in verl>=0.7 resolves rollout backend via RolloutReplicaRegistry.
+                # Register two_stage as a vLLM-backed alias so replica lookup never fails.
+                RolloutReplicaRegistry = getattr(import_module("verl.workers.rollout.replica"), "RolloutReplicaRegistry")
+                vLLMReplica = getattr(
+                    import_module("verl.workers.rollout.vllm_rollout.vllm_async_server"),
+                    "vLLMReplica",
+                )
+                RolloutReplicaRegistry.register("two_stage", lambda: vLLMReplica)
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
             if use_legacy_worker_impl in {"auto", "enable"}:
                 from verl.workers.fsdp_workers import CriticWorker
@@ -441,11 +450,10 @@ class OneRecTask:
                 raise ValueError(f"Invalid use_legacy_worker_impl: {use_legacy_worker_impl}")
             critic_worker = CriticWorker
             if config.actor_rollout_ref.rollout.get("name") == "two_stage":
-                actor_rollout_cls = (
-                    one_rec_async_actor_rollout_ref_worker
-                    if config.actor_rollout_ref.rollout.mode == "async"
-                    else one_rec_actor_rollout_ref_worker
-                )
+                # Force legacy two-stage worker path. In verl>=0.7, rollout config
+                # dataclass may normalize mode to async for validation purposes,
+                # but the OneRec two-stage implementation itself is sync-style.
+                actor_rollout_cls = one_rec_actor_rollout_ref_worker
             else:
                 actor_rollout_cls = (
                     async_actor_rollout_ref_worker

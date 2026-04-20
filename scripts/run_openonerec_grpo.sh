@@ -25,7 +25,9 @@ fi
 BASE_MODEL="${BASE_MODEL:-/path/to/your/model}"
 BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 ROLLOUT_TP_SIZE="${ROLLOUT_TP_SIZE:-1}"
-VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
+# FLASH_ATTN can trigger AsyncLLM EngineDeadError (CUDA invalid argument in
+# flash_attn metadata build) under large batched-token schedules.
+VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-TORCH_SDPA}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
@@ -43,6 +45,8 @@ fi
 
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-True}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
+ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-512}"
+ROLLOUT_ENFORCE_EAGER="${ROLLOUT_ENFORCE_EAGER:-True}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-$((N_GPUS * N_NODES))}"
 
 ROLLOUT_N="${ROLLOUT_N:-1}"
@@ -50,6 +54,7 @@ STAGE2_BEAM_SIZE="${STAGE2_BEAM_SIZE:-32}"
 RESPONSE_LENGTH="${RESPONSE_LENGTH:-2048}"
 STAGE1_MAX_TOKENS="${STAGE1_MAX_TOKENS:-1024}"
 STAGE2_NUM_TOKENS="${STAGE2_NUM_TOKENS:-3}"
+ROLLOUT_MODE="${ROLLOUT_MODE:-async}"
 FILTER_OVERLONG_PROMPTS_WORKERS="${FILTER_OVERLONG_PROMPTS_WORKERS:-16}"
 AGENT_LOOP_NUM_WORKERS="${N_GPUS:-1}"
 
@@ -125,6 +130,7 @@ done
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.filter_overlong_prompts_workers="${FILTER_OVERLONG_PROMPTS_WORKERS}" \
   data.custom_cls.path="${OPENONEREC_RECIPE_PATH}" \
+  ++actor_rollout_ref.model.override_config.attn_implementation=sdpa \
   actor_rollout_ref.model.use_remove_padding="${USE_REMOVE_PADDING}" \
   custom_reward_function.path="${OPENONEREC_RECIPE_PATH}" \
   actor_rollout_ref.actor.use_dynamic_bsz="${USE_DYNAMIC_BSZ}" \
@@ -133,6 +139,8 @@ done
   actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_TOKENS_PER_GPU}" \
+  actor_rollout_ref.rollout.max_num_seqs="${ROLLOUT_MAX_NUM_SEQS}" \
+  actor_rollout_ref.rollout.enforce_eager="${ROLLOUT_ENFORCE_EAGER}" \
   actor_rollout_ref.rollout.agent.num_workers="${AGENT_LOOP_NUM_WORKERS}" \
   actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
   actor_rollout_ref.model.use_fused_kernels="${USE_FUSED_KERNELS}" \
@@ -140,8 +148,11 @@ done
   actor_rollout_ref.model.path="${BASE_MODEL}" \
   actor_rollout_ref.rollout.n="${ROLLOUT_N}" \
   actor_rollout_ref.rollout.tensor_model_parallel_size="${ROLLOUT_TP_SIZE}" \
-  ++actor_rollout_ref.rollout.mode="async" \
+  ++actor_rollout_ref.rollout.mode="${ROLLOUT_MODE}" \
   ++actor_rollout_ref.rollout.name="two_stage" \
+  actor_rollout_ref.rollout.custom.stage1_max_tokens="${STAGE1_MAX_TOKENS}" \
+  actor_rollout_ref.rollout.custom.stage2_num_tokens="${STAGE2_NUM_TOKENS}" \
+  actor_rollout_ref.rollout.custom.stage2_beam_size="${STAGE2_BEAM_SIZE}" \
   actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
   trainer.n_gpus_per_node="${N_GPUS}" \
   trainer.nnodes="${N_NODES}" \
