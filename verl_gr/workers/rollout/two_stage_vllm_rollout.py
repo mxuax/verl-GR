@@ -17,20 +17,30 @@ from verl_gr.workers.rollout.primitives import (
     prepare_prompt_token_inputs,
 )
 
+_LEGACY_SPMD_AVAILABLE = True
 try:
     rollout_spmd_module = import_module("verl.workers.rollout.vllm_rollout.vllm_rollout_spmd")
-except ModuleNotFoundError as exc:
-    raise ImportError(
-        "Legacy vLLM SPMD rollout symbols are not available in the current verl install. "
-        "OpenOneRec two-stage rollout still depends on this path."
-    ) from exc
-
-vLLMRollout = getattr(rollout_spmd_module, "vLLMRollout")
-_pre_process_inputs = getattr(rollout_spmd_module, "_pre_process_inputs")
-
+    vLLMRollout = getattr(rollout_spmd_module, "vLLMRollout")
+    _pre_process_inputs = getattr(rollout_spmd_module, "_pre_process_inputs")
+except ModuleNotFoundError:
+    # verl>=0.7.1 removed vLLM SPMD rollout internals (`vLLMRollout` and
+    # `_pre_process_inputs`) in favor of async server rollout.
+    _LEGACY_SPMD_AVAILABLE = False
+    vLLMRollout = getattr(import_module("verl.workers.rollout.base"), "BaseRollout")
+    _pre_process_inputs = None
 
 class TwoStagevLLMRollout(vLLMRollout):
     """Generate CoT first, then beam-search item outputs."""
+
+    def __init__(self, *args, **kwargs):
+        if not _LEGACY_SPMD_AVAILABLE:
+            raise RuntimeError(
+                "TwoStagevLLMRollout requires legacy vLLM SPMD symbols "
+                "(`verl.workers.rollout.vllm_rollout.vllm_rollout_spmd`), which are "
+                "removed in verl>=0.7.1. Use async vLLM rollout mode (name=vllm) "
+                "or pin to a legacy verl version."
+            )
+        super().__init__(*args, **kwargs)
 
     @torch.no_grad()
     def _two_stage_generation(self, prompts: DataProto, **kwargs) -> DataProto:

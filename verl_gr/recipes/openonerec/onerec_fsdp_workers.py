@@ -10,7 +10,7 @@ from torch.distributed.device_mesh import init_device_mesh
 from verl.utils.device import get_device_name
 from verl.utils.fs import copy_to_local
 from verl.utils.profiler import log_gpu_memory_usage
-from verl.workers.fsdp_workers import ActorRolloutRefWorker
+from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +54,12 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         if self.config.rollout.name != "two_stage":
             return super()._build_rollout(trust_remote_code)
 
-        if self.config.rollout.mode == "async":
-            logger.warning("OneRec two-stage rollout currently supports sync mode only; using base async rollout.")
-            return super()._build_rollout(trust_remote_code)
-
         TwoStagevLLMRollout = getattr(
             import_module("verl_gr.workers.rollout.two_stage_vllm_rollout"),
             "TwoStagevLLMRollout",
         )
+
+        print("\n\nDEBUG: two stage used success!")
 
         infer_tp = self.config.rollout.tensor_model_parallel_size
         dp = self.world_size // infer_tp
@@ -106,4 +104,44 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         )
         log_gpu_memory_usage("After building sharding manager", logger=logger)
         return rollout, rollout_sharding_manager
+
+
+class OneRecAsyncActorRolloutRefWorker(AsyncActorRolloutRefWorker):
+    """Async actor worker with OneRec rollout compatibility hooks."""
+
+    @staticmethod
+    def _normalize_wrap_targets(value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, (list, tuple, set)):
+            normalized: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    normalized.append(item)
+                elif hasattr(item, "__name__"):
+                    normalized.append(str(item.__name__))
+                else:
+                    normalized.append(str(item))
+            return sorted(set(normalized))
+        return value
+
+    def _normalize_fsdp_wrap_policy(self, fsdp_config: Any) -> None:
+        wrap_policy = fsdp_config.get("wrap_policy", None)
+        if wrap_policy is None:
+            return
+        current = wrap_policy.get("transformer_layer_cls_to_wrap", None)
+        normalized = self._normalize_wrap_targets(current)
+        if normalized is not None:
+            wrap_policy["transformer_layer_cls_to_wrap"] = normalized
+
+    def _build_model_optimizer(self, *args, **kwargs):
+        fsdp_config = kwargs.get("fsdp_config")
+        if fsdp_config is None and len(args) >= 2:
+            fsdp_config = args[1]
+        if fsdp_config is not None:
+            self._normalize_fsdp_wrap_policy(fsdp_config)
+        return super()._build_model_optimizer(*args, **kwargs)
+
+    def _build_rollout(self, trust_remote_code: bool = False):
+        return OneRecActorRolloutRefWorker._build_rollout(self, trust_remote_code)
 

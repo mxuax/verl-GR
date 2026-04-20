@@ -427,6 +427,10 @@ class OneRecTask:
                 import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
                 "OneRecActorRolloutRefWorker",
             )
+            one_rec_async_actor_rollout_ref_worker = getattr(
+                import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                "OneRecAsyncActorRolloutRefWorker",
+            )
             async_actor_rollout_ref_worker = AsyncActorRolloutRefWorker
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
             if use_legacy_worker_impl in {"auto", "enable"}:
@@ -436,11 +440,18 @@ class OneRecTask:
             else:
                 raise ValueError(f"Invalid use_legacy_worker_impl: {use_legacy_worker_impl}")
             critic_worker = CriticWorker
-            actor_rollout_cls = (
-                async_actor_rollout_ref_worker
-                if config.actor_rollout_ref.rollout.mode == "async"
-                else one_rec_actor_rollout_ref_worker
-            )
+            if config.actor_rollout_ref.rollout.get("name") == "two_stage":
+                actor_rollout_cls = (
+                    one_rec_async_actor_rollout_ref_worker
+                    if config.actor_rollout_ref.rollout.mode == "async"
+                    else one_rec_actor_rollout_ref_worker
+                )
+            else:
+                actor_rollout_cls = (
+                    async_actor_rollout_ref_worker
+                    if config.actor_rollout_ref.rollout.mode == "async"
+                    else one_rec_actor_rollout_ref_worker
+                )
         elif config.actor_rollout_ref.actor.strategy == "megatron":
             from verl.workers.megatron_workers import (
                 ActorRolloutRefWorker as MegatronActorRolloutRefWorker,
