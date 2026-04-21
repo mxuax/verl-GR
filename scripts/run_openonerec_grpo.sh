@@ -55,6 +55,12 @@ STAGE1_MAX_TOKENS="${STAGE1_MAX_TOKENS:-1024}"
 STAGE2_NUM_TOKENS="${STAGE2_NUM_TOKENS:-3}"
 ROLLOUT_MODE="${ROLLOUT_MODE:-async}"
 FILTER_OVERLONG_PROMPTS_WORKERS="${FILTER_OVERLONG_PROMPTS_WORKERS:-16}"
+# Validation logging controls:
+# - test_freq controls when validation runs.
+# - log_val_generations controls how many samples are printed per validation.
+TEST_FREQ="${TEST_FREQ:-20}"
+VAL_LOG_GENERATIONS="${VAL_LOG_GENERATIONS:-8}"
+VAL_DUMP_GENERATIONS="${VAL_DUMP_GENERATIONS:-True}"
 # Allow explicit control at launch time, e.g.:
 #   AGENT_LOOP_NUM_WORKERS=2 ./scripts/run_openonerec_grpo.sh
 AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-${N_GPUS:-1}}"
@@ -83,6 +89,13 @@ fi
 RAY_SPILL_DIR="${RAY_SPILL_DIR:-${RAY_TMPDIR}/spill}"
 
 mkdir -p "${VERL_GR_ROOT}/logs" "${OUTPUT_DIR}" "${RAY_TMPDIR}" "${RAY_SPILL_DIR}"
+if [[ "${VAL_DUMP_GENERATIONS}" == "True" ]]; then
+  VAL_DATA_DIR="${VAL_DATA_DIR:-${OUTPUT_DIR}/val_generations}"
+  mkdir -p "${VAL_DATA_DIR}"
+  VALIDATION_DATA_DIR_ARG="${VAL_DATA_DIR}"
+else
+  VALIDATION_DATA_DIR_ARG="null"
+fi
 
 export PYTHONPATH="${VERL_GR_ROOT}:${PYTHONPATH:-}"
 export VLLM_ATTENTION_BACKEND
@@ -96,6 +109,7 @@ echo "==================================="
 echo "Cluster: ${N_NODES} node(s) x ${N_GPUS} GPU(s)"
 echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}, Beam: ${STAGE2_BEAM_SIZE}"
+echo "Validation test_freq: ${TEST_FREQ}, log_val_generations: ${VAL_LOG_GENERATIONS}"
 echo "Data filter workers: ${FILTER_OVERLONG_PROMPTS_WORKERS}"
 echo "Agent loop workers: ${AGENT_LOOP_NUM_WORKERS}"
 echo "Use fused kernels: ${USE_FUSED_KERNELS}"
@@ -159,6 +173,9 @@ done
   trainer.project_name="${PROJECT_NAME}" \
   trainer.experiment_name="${EXPERIMENT_NAME}" \
   trainer.default_local_dir="${OUTPUT_DIR}/ckpt" \
+  trainer.test_freq="${TEST_FREQ}" \
+  trainer.log_val_generations="${VAL_LOG_GENERATIONS}" \
+  trainer.validation_data_dir=${VALIDATION_DATA_DIR_ARG} \
   trainer.logger='[tensorboard]' \
   trainer.remove_previous_ckpt_in_save=True \
   +ray_kwargs.ray_init._temp_dir="${RAY_TMPDIR}" \
