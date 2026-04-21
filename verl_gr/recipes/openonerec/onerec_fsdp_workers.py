@@ -4,16 +4,15 @@ import logging
 from importlib import import_module
 from typing import Any
 
-import torch
+from omegaconf import OmegaConf
 from torch.distributed.device_mesh import init_device_mesh
 
 from verl.utils.device import get_device_name
-from verl.utils.fs import copy_to_local
 from verl.utils.profiler import log_gpu_memory_usage
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.config import omega_conf_to_dataclass
-from verl.workers.config import HFModelConfig
-from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
+from verl.workers.config import HFModelConfig, RolloutConfig
+from verl.workers.fsdp_workers import ActorRolloutRefWorker
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +56,8 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         if self.config.rollout.name != "two_stage":
             return super()._build_rollout(trust_remote_code)
 
-        TwoStagevLLMRollout = getattr(
-            import_module("verl_gr.workers.rollout.two_stage_vllm_rollout"),
-            "TwoStagevLLMRollout",
-        )
+        rollout_module = import_module("verl_gr.workers.rollout.two_stage_vllm_rollout")
+        TwoStagevLLMRollout = getattr(rollout_module, "TwoStagevLLMRollout")
 
         logger.warning("Two-stage rollout selected: %s", TwoStagevLLMRollout.__name__)
 
@@ -73,48 +70,19 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         rollout_device_mesh = init_device_mesh(device_name, mesh_shape=(dp, infer_tp), mesh_dim_names=["dp", "infer_tp"])
 
         log_gpu_memory_usage("Before building OneRec vllm rollout", logger=logger)
-        local_path = copy_to_local(self.config.model.path, use_shm=self.config.model.get("use_shm", False))
-        lora_kwargs = (
-            {"lora_kwargs": {"enable_lora": True, "max_loras": 1, "max_lora_rank": self._lora_rank}}
-            if self._is_lora
-            else {}
-        )
+        rollout_cfg_node = OmegaConf.create(OmegaConf.to_container(self.config.rollout, resolve=True))
+        rollout_cfg: RolloutConfig = omega_conf_to_dataclass(rollout_cfg_node)
+        model_cfg: HFModelConfig = omega_conf_to_dataclass(self.config.model, dataclass_type=HFModelConfig)
 
+        self.model_config = model_cfg
         rollout = TwoStagevLLMRollout(
-            model_path=local_path,
-            config=self.config.rollout,
-            tokenizer=self.tokenizer,
-            model_hf_config=self.actor_model_config,
+            config=rollout_cfg,
+            model_config=model_cfg,
             device_mesh=rollout_device_mesh,
-            trust_remote_code=trust_remote_code,
-            **lora_kwargs,
         )
         self.rollout = rollout
         self.rollout_device_mesh = rollout_device_mesh
-        log_gpu_memory_usage("After building OneRec vllm rollout", logger=logger)
-
-        try:
-            from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
-
-            full_params = torch.distributed.get_world_size() == 1
-            self.rollout_sharding_manager = FSDPVLLMShardingManager(
-                module=self.actor_module_fsdp,
-                inference_engine=rollout.inference_engine,
-                model_config=self.actor_model_config,
-                rollout_config=self.config.rollout,
-                full_params=full_params,
-                device_mesh=rollout_device_mesh,
-                offload_param=self._is_offload_param,
-                load_format=self.config.rollout.load_format,
-                layered_summon=self.config.rollout.get("layered_summon", False),
-            )
-            log_gpu_memory_usage("After building sharding manager", logger=logger)
-        except ModuleNotFoundError:
-            logger.warning(
-                "FSDPVLLMShardingManager is unavailable in this verl build; "
-                "continuing with TwoStagevLLMRollout without explicit sharding manager."
-            )
-            self.rollout_sharding_manager = None
+        log_gpu_memory_usage("After building OneRec vllm rollout (async adapter)", logger=logger)
 
         # Keep parity with upstream ActorRolloutRefWorker._build_rollout(), where
         # rollout_mode()/update_weights rely on these lifecycle flags.

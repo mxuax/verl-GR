@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-from importlib import util as importlib_util
 from importlib import import_module
 import logging
-from pathlib import Path
-import sys
-import types
 
 import torch
 
 from verl import DataProto
-
 from verl_gr.third_party.vllm import BeamSearchParams, LoRARequest
 from verl_gr.workers.rollout.primitives import (
     build_lora_requests,
@@ -39,114 +34,10 @@ def _read_rollout_custom_value(config, key: str, default):
         return default
 
 
-def _load_local_legacy_spmd_module():
-    """Load legacy SPMD rollout module from local OneRec fork."""
-    legacy_path = (
-        Path(__file__).resolve().parents[4]
-        / "oneonerec_fredfork/verl_rl/verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py"
-    )
-    if not legacy_path.exists():
-        return None
-
-    spec = importlib_util.spec_from_file_location("oneonerec_legacy_vllm_rollout_spmd", legacy_path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib_util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except ModuleNotFoundError as exc:
-        # Compatibility shim for newer vLLM versions where legacy
-        # `vllm.model_executor.sampling_metadata` no longer exists.
-        if exc.name == "vllm.model_executor.sampling_metadata":
-            shim = types.ModuleType("vllm.model_executor.sampling_metadata")
-
-            class SamplingMetadata:  # noqa: D401
-                """Compatibility placeholder for legacy imports."""
-
-            shim.SamplingMetadata = SamplingMetadata
-            sys.modules["vllm.model_executor.sampling_metadata"] = shim
-            spec.loader.exec_module(module)
-        else:
-            raise
-    return module
-
-try:
-    rollout_spmd_module = import_module("verl.workers.rollout.vllm_rollout.vllm_rollout_spmd")
-    vLLMRollout = getattr(rollout_spmd_module, "vLLMRollout")
-    _pre_process_inputs = getattr(rollout_spmd_module, "_pre_process_inputs")
-    _LEGACY_SPMD_AVAILABLE = True
-except ModuleNotFoundError:
-    # verl>=0.7.1 removed upstream legacy SPMD rollout symbols.
-    rollout_spmd_module = _load_local_legacy_spmd_module()
-    if rollout_spmd_module is not None:
-        vLLMRollout = getattr(rollout_spmd_module, "vLLMRollout")
-        _pre_process_inputs = getattr(rollout_spmd_module, "_pre_process_inputs")
-        _LEGACY_SPMD_AVAILABLE = True
-        logger.warning("Loaded legacy vLLM SPMD rollout symbols from local OneRec fork.")
-    else:
-        # Keep async compatibility when no local legacy module is available.
-        vLLMRollout = ServerAdapter
-        _pre_process_inputs = None
-        _LEGACY_SPMD_AVAILABLE = False
-
-class TwoStagevLLMRollout(vLLMRollout):
+class TwoStagevLLMRollout(ServerAdapter):
     """Generate CoT first, then beam-search item outputs."""
 
     def __init__(self, *args, **kwargs):
-        is_async_adapter_call = {"config", "model_config", "device_mesh"}.issubset(kwargs) and not {
-            "model_path",
-            "tokenizer",
-            "model_hf_config",
-        }.issubset(kwargs)
-
-        if _LEGACY_SPMD_AVAILABLE:
-            if is_async_adapter_call:
-                # Some verl>=0.7 async worker paths still instantiate this class
-                # via ServerAdapter-style kwargs. Skip legacy constructor in that case.
-                ServerAdapter.__init__(
-                    self,
-                    config=kwargs["config"],
-                    model_config=kwargs["model_config"],
-                    device_mesh=kwargs["device_mesh"],
-                    replica_rank=kwargs.get("replica_rank", -1),
-                )
-                logger.warning(
-                    "TwoStagevLLMRollout received async-style ctor kwargs while legacy "
-                    "SPMD symbols are available; using ServerAdapter compatibility path."
-                )
-                return
-            try:
-                super().__init__(*args, **kwargs)
-            except TypeError as exc:
-                # Legacy OneRec vLLMRollout calls `BaseRollout.__init__()` with no args,
-                # but verl>=0.7 BaseRollout now requires (config, model_config, device_mesh).
-                # Patch BaseRollout.__init__ temporarily to keep legacy constructor working.
-                if "BaseRollout.__init__" not in str(exc):
-                    raise
-
-                base_rollout_cls = type(self).__mro__[2]
-                old_init = base_rollout_cls.__init__
-
-                def _compat_base_init(_self, *init_args, **init_kwargs):
-                    if len(init_args) >= 3:
-                        _self.config = init_args[0]
-                        _self.model_config = init_args[1]
-                        _self.device_mesh = init_args[2]
-                    elif {"config", "model_config", "device_mesh"}.issubset(init_kwargs):
-                        _self.config = init_kwargs["config"]
-                        _self.model_config = init_kwargs["model_config"]
-                        _self.device_mesh = init_kwargs["device_mesh"]
-                    # no-op for legacy no-arg super() calls
-                    return None
-
-                base_rollout_cls.__init__ = _compat_base_init
-                try:
-                    super().__init__(*args, **kwargs)
-                finally:
-                    base_rollout_cls.__init__ = old_init
-            return
-
-        # Async mode constructor for verl>=0.7.1 (ServerAdapter).
         if {"config", "model_config", "device_mesh"}.issubset(kwargs):
             super().__init__(
                 config=kwargs["config"],
@@ -175,7 +66,7 @@ class TwoStagevLLMRollout(vLLMRollout):
         prepared_inputs = prepare_prompt_token_inputs(
             prompts,
             pad_token_id=self.pad_token_id,
-            preprocess_inputs=_pre_process_inputs,
+            preprocess_inputs=None,
         )
         vllm_inputs = prepared_inputs.vllm_inputs
         non_tensor_batch = prepared_inputs.non_tensor_batch
@@ -265,12 +156,11 @@ class TwoStagevLLMRollout(vLLMRollout):
             non_tensor_batch=expansion.non_tensor_batch,
         )
 
-    @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
-        if not _LEGACY_SPMD_AVAILABLE:
+        if not hasattr(self, "inference_engine"):
             raise NotImplementedError(
-                "TwoStagevLLMRollout.generate_sequences() uses legacy SPMD inference_engine and "
-                "is not available in verl>=0.7.1 async server mode."
+                "TwoStagevLLMRollout.generate_sequences() requires inference_engine and is "
+                "typically bypassed in verl>=0.7.1 async server mode."
             )
         for key in [
             "max_tokens",
@@ -290,24 +180,12 @@ class TwoStagevLLMRollout(vLLMRollout):
 
     async def resume(self, tags: list[str]):
         """Lifecycle hook required by BaseRollout in verl>=0.7.x."""
-        if not _LEGACY_SPMD_AVAILABLE:
-            return
-        if getattr(self.config, "free_cache_engine", False):
-            # Legacy SPMD path keeps a local inference engine.
-            wake_tags = set(tags or [])
-            if "weights" in wake_tags or "kv_cache" in wake_tags:
-                self.inference_engine.wake_up()
+        await super().resume(tags=tags)
 
     async def update_weights(self, weights, global_steps: int = None, **kwargs):
-        """Best-effort compatibility hook for legacy sync two-stage rollout."""
-        _ = (weights, global_steps, kwargs)
-        # Legacy sync path updates weights through sharding manager interactions;
-        # keep this as a no-op to satisfy new rollout interface.
-        return
+        """Delegate weight sync to ServerAdapter async transport."""
+        await super().update_weights(weights=weights, global_steps=global_steps, **kwargs)
 
     async def release(self):
         """Lifecycle hook required by BaseRollout in verl>=0.7.x."""
-        if not _LEGACY_SPMD_AVAILABLE:
-            return
-        if getattr(self.config, "free_cache_engine", False):
-            self.inference_engine.sleep(level=1)
+        await super().release()
