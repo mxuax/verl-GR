@@ -165,7 +165,7 @@ def openonerec_validate(trainer):
 
         batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
         non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
-        for key in ("multi_modal_data", "raw_prompt", "tools_kwargs", "interaction_kwargs", "agent_name"):
+        for key in ("multi_modal_data", "raw_prompt", "tools_kwargs", "interaction_kwargs", "agent_name", "extra_info"):
             if key in test_batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append(key)
         test_gen_batch = test_batch.pop(
@@ -174,7 +174,7 @@ def openonerec_validate(trainer):
         )
         # Keep reward-routing metadata in generation batch so async reward loop
         # can resolve source-specific scoring during validation.
-        for key in ("source", "data_source", "reward_model", "extra_info", "uid"):
+        for key in ("source", "data_source", "reward_model", "uid"):
             if key in test_batch.non_tensor_batch and key not in test_gen_batch.non_tensor_batch:
                 test_gen_batch.non_tensor_batch[key] = test_batch.non_tensor_batch[key]
         trainer._ensure_reward_routing_keys(test_gen_batch)
@@ -198,9 +198,6 @@ def openonerec_validate(trainer):
             meta_info["stage2_beam_size"] = rollout_custom.get("stage2_beam_size", 32)
             meta_info["stage2_num_tokens"] = rollout_custom.get("stage2_num_tokens", 3)
             meta_info["max_tokens"] = trainer.config.data.get("max_response_length", 1024)
-            meta_info["use_beam_search"] = False
-            meta_info["n"] = val_kwargs.get("n", 1)
-            meta_info["return_all_beams"] = True
             print(f"[OneRecTrainer] Validation Two-Stage Enabled: {meta_info}")
         elif use_beam_search_val:
             meta_info["use_beam_search"] = True
@@ -224,22 +221,16 @@ def openonerec_validate(trainer):
         else:
             test_output_gen_batch_padded = trainer.async_rollout_manager.generate_sequences(test_gen_batch_padded)
 
-        if use_beam_search_val or is_two_stage_rollout_val:
+        if is_two_stage_rollout_val:
+            actual_pad_size = pad_size
+        elif use_beam_search_val:
             n_beams = (
-                rollout_custom.get("stage2_beam_size", 2)
-                if is_two_stage_rollout_val
-                else val_kwargs.get("n", 1)
+                val_kwargs.get("n", 1)
             )
-            if is_two_stage_rollout_val:
-                print(
-                    "[Validation Debug] Two-stage unpad: "
-                    f"original pad_size={pad_size}, stage2_beam_size={n_beams}, actual_pad_size={pad_size * n_beams}"
-                )
-            else:
-                print(
-                    "[Validation Debug] Beam search unpad: "
-                    f"original pad_size={pad_size}, n_beams={n_beams}, actual_pad_size={pad_size * n_beams}"
-                )
+            print(
+                "[Validation Debug] Beam search unpad: "
+                f"original pad_size={pad_size}, n_beams={n_beams}, actual_pad_size={pad_size * n_beams}"
+            )
             actual_pad_size = pad_size * n_beams
         else:
             actual_pad_size = pad_size
