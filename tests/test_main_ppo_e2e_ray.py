@@ -197,7 +197,12 @@ def ray_runtime():
     if ray.is_initialized():
         yield
         return
-    ray.init(local_mode=True, num_cpus=2, include_dashboard=False, ignore_reinit_error=True)
+    ray.init(
+        address="local",
+        num_cpus=2,
+        include_dashboard=False,
+        ignore_reinit_error=True,
+    )
     try:
         yield
     finally:
