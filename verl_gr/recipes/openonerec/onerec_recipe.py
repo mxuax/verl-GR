@@ -559,6 +559,20 @@ class OneRecTask:
 SLOT_PATTERN = re.compile(r"<s_a_(\d+)><s_b_(\d+)><s_c_(\d+)>")
 
 
+def _extract_sid_region(prediction: str) -> str:
+    """Extract the region that should contain SID tuples.
+
+    In two-stage rollout, decoded responses may not always include an opening
+    `<think>` token, but they usually include `</think>` before SID tokens.
+    """
+    if not isinstance(prediction, str):
+        return ""
+    think_end = prediction.find("</think>")
+    if think_end != -1:
+        return prediction[think_end + len("</think>") :]
+    return prediction
+
+
 def _extract_all_tuples(text: Any) -> list[tuple[str, str, str]]:
     if not isinstance(text, str):
         logger.warning("_extract_all_tuples received non-string input: %s", type(text))
@@ -579,16 +593,8 @@ def think_format_reward(prediction: str) -> float:
     return 1.0 if len(content_stripped) > 10 else 0.0
 
 
-def _strip_think_prefix_if_present(prediction: str) -> str:
-    """Return content after </think> when present, else original prediction."""
-    if "<think>" in prediction and "</think>" in prediction:
-        think_end_idx = prediction.find("</think>") + len("</think>")
-        return prediction[think_end_idx:]
-    return prediction
-
-
 def partial_hit_reward(prediction: str, ground_truth: str) -> float:
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
         return 0.0
@@ -607,8 +613,7 @@ def partial_hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def hit_reward(prediction: str, ground_truth: str) -> float:
-    prediction = _strip_think_prefix_if_present(prediction)
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
         return 0.0
@@ -618,8 +623,7 @@ def hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def first_sid_hit_reward(prediction: str, ground_truth: str) -> float:
-    prediction = _strip_think_prefix_if_present(prediction)
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     if not pred_tuples:
         return 0.0
     first_pred_tuple = pred_tuples[0]
@@ -631,7 +635,7 @@ def first_sid_hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def pass_rate(prediction: str, ground_truth: str) -> float:
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
         return 0.0
@@ -652,6 +656,7 @@ def compute_score(
     hit_reward_value = hit_reward(prediction, ground_truth)
     pass_rate_value = pass_rate(prediction, ground_truth)
     pass_at_1_value = first_sid_hit_reward(prediction, ground_truth)
+
     return {
         "score": pass_at_1_value,
         "format_reward": format_reward_value,
