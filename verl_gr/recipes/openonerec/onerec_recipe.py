@@ -1,5 +1,6 @@
 import ast
 import copy
+import functools
 import logging
 import os
 import re
@@ -53,6 +54,49 @@ def collate_fn(samples: list[dict[str, Any]]) -> dict[str, Any]:
     for key, value in non_tensors.items():
         batch[key] = np.array(value, dtype=object)
     return batch
+
+
+def extract_prompt_fields(
+    row: dict[str, Any],
+    *,
+    prompt_key: str,
+    enable_think: bool,
+    enable_nonthink: bool,
+) -> dict[str, Any]:
+    raw_messages = row.get("messages")
+    if isinstance(raw_messages, str):
+        messages = ast.literal_eval(raw_messages)
+    else:
+        messages = raw_messages or []
+
+    clean_chats = [
+        {
+            "role": message.get("role"),
+            "content": "".join(
+                segment.get("text", "")
+                for segment in message.get("content", [])
+                if segment.get("type") == "text"
+            ),
+        }
+        for message in messages
+    ]
+    if not clean_chats:
+        raise ValueError("Sample has empty messages; please check data integrity.")
+
+    prompt_messages = clean_chats[:-1]
+    if enable_think:
+        for message in prompt_messages:
+            if message["role"] == "user":
+                message["content"] = message["content"] + "/think"
+    if enable_nonthink:
+        for message in prompt_messages:
+            if message["role"] == "user":
+                message["content"] = message["content"] + "/no_think"
+
+    ground_truth_message = clean_chats[-1]["content"]
+    row[prompt_key] = prompt_messages
+    row["reward_model"] = {"ground_truth": ground_truth_message, "style": "rule"}
+    return row
 
 
 class OneRecDataset(Dataset):
@@ -132,49 +176,40 @@ class OneRecDataset(Dataset):
             self.dataframe = self.dataframe.select(indices.tolist())
             print(f"selected {self.max_samples} random samples out of {len(self.dataframe)}")
 
-        self.dataframe = self.dataframe.map(
-            self._extract_prompt_fields,
-            num_proc=self.num_workers,
-            desc="Extract prompts and reward annotations",
+        extract_fn = functools.partial(
+            extract_prompt_fields,
+            prompt_key=self.prompt_key,
+            enable_think=self.enable_think,
+            enable_nonthink=self.enable_nonthink,
         )
+        try:
+            self.dataframe = self.dataframe.map(
+                extract_fn,
+                num_proc=self.num_workers,
+                desc="Extract prompts and reward annotations",
+            )
+        except TypeError as exc:
+            if "cannot pickle" not in str(exc):
+                raise
+            logger.warning(
+                "Falling back to single-process map due to pickle error: %s",
+                exc,
+            )
+            self.dataframe = self.dataframe.map(
+                extract_fn,
+                num_proc=None,
+                desc="Extract prompts and reward annotations",
+            )
         logger.info("processed dataset len: %s", len(self.dataframe))
         self.dataframe = self.maybe_filter_out_long_prompts(self.dataframe)
 
     def _extract_prompt_fields(self, row: dict[str, Any]) -> dict[str, Any]:
-        raw_messages = row.get("messages")
-        if isinstance(raw_messages, str):
-            messages = ast.literal_eval(raw_messages)
-        else:
-            messages = raw_messages or []
-
-        clean_chats = [
-            {
-                "role": message.get("role"),
-                "content": "".join(
-                    segment.get("text", "")
-                    for segment in message.get("content", [])
-                    if segment.get("type") == "text"
-                ),
-            }
-            for message in messages
-        ]
-        if not clean_chats:
-            raise ValueError("Sample has empty messages; please check data integrity.")
-
-        prompt_messages = clean_chats[:-1]
-        if self.enable_think:
-            for message in prompt_messages:
-                if message["role"] == "user":
-                    message["content"] = message["content"] + "/think"
-        if self.enable_nonthink:
-            for message in prompt_messages:
-                if message["role"] == "user":
-                    message["content"] = message["content"] + "/no_think"
-
-        ground_truth_message = clean_chats[-1]["content"]
-        row[self.prompt_key] = prompt_messages
-        row["reward_model"] = {"ground_truth": ground_truth_message, "style": "rule"}
-        return row
+        return extract_prompt_fields(
+            row,
+            prompt_key=self.prompt_key,
+            enable_think=self.enable_think,
+            enable_nonthink=self.enable_nonthink,
+        )
 
     def maybe_filter_out_long_prompts(self, dataframe: datasets.Dataset) -> datasets.Dataset:
         if not self.filter_overlong_prompts:
@@ -205,11 +240,25 @@ class OneRecDataset(Dataset):
                 messages = doc[prompt_key]
                 return len(tokenizer.apply_chat_template(messages, add_generation_prompt=True))
 
-        filtered = dataframe.filter(
-            lambda doc: doc_length(doc) <= self.max_prompt_length - 10,
-            num_proc=self.num_workers,
-            desc=f"Filtering prompts longer than {self.max_prompt_length - 10} tokens",
-        )
+        filter_fn = lambda doc: doc_length(doc) <= self.max_prompt_length - 10
+        try:
+            filtered = dataframe.filter(
+                filter_fn,
+                num_proc=self.num_workers,
+                desc=f"Filtering prompts longer than {self.max_prompt_length - 10} tokens",
+            )
+        except TypeError as exc:
+            if "cannot pickle" not in str(exc):
+                raise
+            logger.warning(
+                "Falling back to single-process filter due to pickle error: %s",
+                exc,
+            )
+            filtered = dataframe.filter(
+                filter_fn,
+                num_proc=None,
+                desc=f"Filtering prompts longer than {self.max_prompt_length - 10} tokens",
+            )
         logger.info("filtered dataset len: %s", len(filtered))
         return filtered
 
