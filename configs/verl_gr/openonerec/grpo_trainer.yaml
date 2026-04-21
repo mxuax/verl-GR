@@ -77,7 +77,7 @@ actor_rollout_ref:
     temperature: 1.0
     top_p: 1.0
     do_sample: true
-    gpu_memory_utilization: 0.6
+    gpu_memory_utilization: 0.35
     max_num_batched_tokens: 40960
     max_num_seqs: 2048
     log_prob_max_token_len_per_gpu: 40960

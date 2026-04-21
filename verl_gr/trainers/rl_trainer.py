@@ -8,7 +8,11 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase
 from verl.trainer.ppo.ray_trainer import Role, ResourcePoolManager
 from verl.utils.torch_functional import masked_mean
 
-from verl_gr.recipes.openonerec.onerec_trainer import openonerec_validate
+from verl_gr.recipes.openonerec.onerec_trainer import (
+    openonerec_dump_generations,
+    openonerec_maybe_log_val_generations,
+    openonerec_validate,
+)
 
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
 
@@ -124,4 +128,18 @@ class RLTrainer(RayPPOTrainerBase):
 
     def _validate(self):
         return openonerec_validate(self)
+
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
+        return openonerec_dump_generations(
+            self,
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=dump_path,
+            ground_truths=ground_truths,
+        )
+
+    def _maybe_log_val_generations(self, inputs, outputs, scores):
+        return openonerec_maybe_log_val_generations(self, inputs=inputs, outputs=outputs, scores=scores)
 

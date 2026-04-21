@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from collections import defaultdict
 from importlib import import_module
 
@@ -16,6 +18,103 @@ process_validation_metrics = getattr(metric_utils_mod, "process_validation_metri
 pad_dataproto_to_divisor = getattr(protocol_mod, "pad_dataproto_to_divisor")
 unpad_dataproto = getattr(protocol_mod, "unpad_dataproto")
 extract_reward = getattr(reward_mod, "extract_reward")
+
+
+class ValidationGenerationsLogger:
+    """Local validation generations logger for OpenOneRec.
+
+    This avoids relying on external project forks. For tensorboard, we emit a
+    compact text preview to stdout since table logging is backend-specific.
+    """
+
+    def __init__(self, project_name: str, experiment_name: str):
+        self.project_name = project_name
+        self.experiment_name = experiment_name
+
+    @staticmethod
+    def _normalize_backends(logger_backends):
+        if logger_backends is None:
+            return []
+        if isinstance(logger_backends, str):
+            return [logger_backends]
+        return list(logger_backends)
+
+    def log(self, logger_backends, samples, global_step: int) -> None:
+        backends = self._normalize_backends(logger_backends)
+        if not samples:
+            return
+
+        # Tensorboard does not have a standard table API in this trainer stack.
+        # Keep behavior deterministic and visible via logs.
+        if "tensorboard" in backends:
+            preview = samples[: min(3, len(samples))]
+            print(
+                f"[val_generations] step={global_step} project={self.project_name} "
+                f"exp={self.experiment_name} logged={len(samples)} preview={len(preview)}"
+            )
+            for idx, (inp, out, score) in enumerate(preview):
+                inp_text = str(inp)[:160].replace("\n", "\\n")
+                out_text = str(out)[:160].replace("\n", "\\n")
+                print(f"[val_generations][{idx}] score={score} input='{inp_text}' output='{out_text}'")
+
+
+def openonerec_dump_generations(
+    trainer,
+    inputs,
+    outputs,
+    scores,
+    reward_extra_infos_dict,
+    dump_path,
+    ground_truths=None,
+):
+    """Dump rollout/validation samples as JSONL."""
+    os.makedirs(dump_path, exist_ok=True)
+    filename = os.path.join(dump_path, f"{trainer.global_steps}.jsonl")
+
+    n = len(inputs)
+    base_data = {
+        "input": inputs,
+        "output": outputs,
+        "score": scores,
+        "step": [trainer.global_steps] * n,
+    }
+
+    if ground_truths and len(ground_truths) == n:
+        base_data["ground_truth"] = ground_truths
+
+    for key, values in reward_extra_infos_dict.items():
+        if len(values) == n:
+            base_data[key] = values
+
+    lines = []
+    for i in range(n):
+        entry = {k: v[i] for k, v in base_data.items()}
+        lines.append(json.dumps(entry, ensure_ascii=False))
+
+    with open(filename, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"Dumped generations to {filename}")
+
+
+def openonerec_maybe_log_val_generations(trainer, inputs, outputs, scores):
+    """Log a table of validation samples to the configured logger."""
+    generations_to_log = trainer.config.trainer.get("log_val_generations", 0)
+    if generations_to_log == 0:
+        return
+
+    if not hasattr(trainer, "validation_generations_logger") or trainer.validation_generations_logger is None:
+        trainer.validation_generations_logger = ValidationGenerationsLogger(
+            project_name=trainer.config.trainer.project_name,
+            experiment_name=trainer.config.trainer.experiment_name,
+        )
+
+    samples = list(zip(inputs, outputs, scores, strict=True))
+    samples.sort(key=lambda x: x[0])
+    rng = np.random.RandomState(42)
+    rng.shuffle(samples)
+    samples = samples[:generations_to_log]
+    trainer.validation_generations_logger.log(trainer.config.trainer.logger, samples, trainer.global_steps)
 
 
 def openonerec_validate(trainer):
@@ -223,10 +322,12 @@ def openonerec_validate(trainer):
             data_sources_batch = ["unknown"] * reward_tensor.shape[0]
         data_source_lst.append(data_sources_batch)
 
-    trainer._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
+    openonerec_maybe_log_val_generations(trainer, inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
+    # dump generations
     val_data_dir = trainer.config.trainer.get("validation_data_dir", None)
     if val_data_dir:
-        trainer._dump_generations(
+        openonerec_dump_generations(
+            trainer,
             inputs=sample_inputs,
             outputs=sample_outputs,
             scores=sample_scores,
