@@ -579,6 +579,14 @@ def think_format_reward(prediction: str) -> float:
     return 1.0 if len(content_stripped) > 10 else 0.0
 
 
+def _strip_think_prefix_if_present(prediction: str) -> str:
+    """Return content after </think> when present, else original prediction."""
+    if "<think>" in prediction and "</think>" in prediction:
+        think_end_idx = prediction.find("</think>") + len("</think>")
+        return prediction[think_end_idx:]
+    return prediction
+
+
 def partial_hit_reward(prediction: str, ground_truth: str) -> float:
     pred_tuples = _extract_all_tuples(prediction)
     gt_tuples = _extract_all_tuples(ground_truth)
@@ -599,11 +607,7 @@ def partial_hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def hit_reward(prediction: str, ground_truth: str) -> float:
-    if "</think>" in prediction and "<think>" in prediction:
-        think_end_idx = prediction.find("</think>") + len("</think>")
-        prediction = prediction[think_end_idx:]
-    else:
-        return 0.0
+    prediction = _strip_think_prefix_if_present(prediction)
     pred_tuples = _extract_all_tuples(prediction)
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
@@ -614,11 +618,7 @@ def hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def first_sid_hit_reward(prediction: str, ground_truth: str) -> float:
-    if "</think>" in prediction and "<think>" in prediction:
-        think_end_idx = prediction.find("</think>") + len("</think>")
-        prediction = prediction[think_end_idx:]
-    else:
-        return 0.0
+    prediction = _strip_think_prefix_if_present(prediction)
     pred_tuples = _extract_all_tuples(prediction)
     if not pred_tuples:
         return 0.0
