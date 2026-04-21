@@ -27,7 +27,6 @@ BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 ROLLOUT_TP_SIZE="${ROLLOUT_TP_SIZE:-1}"
 # FLASH_ATTN can trigger AsyncLLM EngineDeadError (CUDA invalid argument in
 # flash_attn metadata build) under large batched-token schedules.
-VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-TORCH_SDPA}"
 LEARNING_RATE="${LEARNING_RATE:-2e-6}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
@@ -132,7 +131,6 @@ done
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.filter_overlong_prompts_workers="${FILTER_OVERLONG_PROMPTS_WORKERS}" \
   data.custom_cls.path="${OPENONEREC_RECIPE_PATH}" \
-  ++actor_rollout_ref.model.override_config.attn_implementation=sdpa \
   actor_rollout_ref.model.use_remove_padding="${USE_REMOVE_PADDING}" \
   custom_reward_function.path="${OPENONEREC_RECIPE_PATH}" \
   actor_rollout_ref.actor.use_dynamic_bsz="${USE_DYNAMIC_BSZ}" \
