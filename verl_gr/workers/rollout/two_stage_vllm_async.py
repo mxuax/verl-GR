@@ -15,7 +15,6 @@ from verl.workers.rollout.vllm_rollout.utils import (
     VLLM_LORA_INT_ID,
     VLLM_LORA_NAME,
     VLLM_LORA_PATH,
-    extract_prompt_logprobs,
 )
 from verl.workers.rollout.vllm_rollout.vllm_async_server import (
     LoRARequest,
@@ -27,6 +26,42 @@ from verl.workers.rollout.vllm_rollout.vllm_async_server import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def extract_prompt_logprobs(output: RequestOutput, num_prompt_logprobs: Optional[int], result_dict: dict[str, list]):
+    """Extract prompt log probabilities from generation output."""
+    if num_prompt_logprobs is None or output.prompt_logprobs is None:
+        return
+
+    prompt_logprobs_ls, prompt_ids_ls = [], []
+    # NOTE: logprob of first prompt token is None.
+    for logprobs_dict in output.prompt_logprobs[1:]:
+        if num_prompt_logprobs == 0:
+            token_id_str = list(logprobs_dict.keys())[0]
+            logprob = logprobs_dict[token_id_str].logprob
+            prompt_logprobs_ls.append([logprob])
+            prompt_ids_ls.append([int(token_id_str)])
+        else:
+            prompt_ids = [None] * num_prompt_logprobs
+            prompt_logprobs = [None] * num_prompt_logprobs
+            # We get either top-k logprobs or top-k plus the sampled logprob (if sampled token is not in top-k)
+            assert len(logprobs_dict) in [num_prompt_logprobs, num_prompt_logprobs + 1], len(logprobs_dict)
+            for token_id_str, token_logprob in logprobs_dict.items():
+                rank = token_logprob.rank
+                if rank > num_prompt_logprobs:
+                    continue  # the sampled token is not in the top-k
+                logprob = token_logprob.logprob
+                prompt_ids[rank - 1] = int(token_id_str)
+                prompt_logprobs[rank - 1] = logprob
+            prompt_logprobs_ls.append(prompt_logprobs)
+            prompt_ids_ls.append(prompt_ids)
+
+    # NOTE: pad a dummy prompt logprob for last prompt token.
+    prompt_logprobs_ls.append([0.0] * max(num_prompt_logprobs, 1))
+    prompt_ids_ls.append([0] * max(num_prompt_logprobs, 1))
+
+    result_dict["prompt_ids"] = prompt_ids_ls
+    result_dict["prompt_logprobs"] = prompt_logprobs_ls
 
 
 def _read_rollout_custom_value(config, key: str, default):
@@ -186,6 +221,16 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
                 ),
             )
         )
+        stage2_temperature = float(
+            sampling_params.pop(
+                "stage2_temperature",
+                _read_rollout_custom_value(self.config, "stage2_temperature", 0.0),
+            )
+        )
+        if beam_width > 1 and stage2_temperature <= 0.0:
+            # vLLM treats temperature==0 as greedy sampling, which requires n==1.
+            # Auto-bump temperature when requesting multiple stage-2 candidates.
+            stage2_temperature = 1.0
 
         stage1_params = SamplingParams(
             max_tokens=max(0, min(stage1_max_tokens, self.config.max_model_len - len(prompt_ids))),
@@ -214,7 +259,7 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         stage2_params = SamplingParams(
             max_tokens=max(0, min(stage2_num_tokens, self.config.max_model_len - len(stage2_prompt_ids))),
             n=max(1, beam_width),
-            temperature=0.0,
+            temperature=stage2_temperature,
             top_p=1.0,
             top_k=-1,
             logprobs=0 if want_logprobs else None,
@@ -311,5 +356,14 @@ class TwoStagevLLMReplica(vLLMReplica):
         is_reward_model: bool = False,
         is_teacher_model: bool = False,
     ):
-        super().__init__(replica_rank, config, model_config, gpus_per_node, is_reward_model, is_teacher_model)
+        # verl_071 vLLMReplica.__init__ doesn't accept is_teacher_model; keep this
+        # argument for caller compatibility but do not forward it upstream.
+        _ = is_teacher_model
+        super().__init__(
+            replica_rank=replica_rank,
+            config=config,
+            model_config=model_config,
+            gpus_per_node=gpus_per_node,
+            is_reward_model=is_reward_model,
+        )
         self.server_class = ray.remote(TwoStagevLLMHttpServer)

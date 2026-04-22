@@ -12,7 +12,7 @@ from verl.utils.profiler import log_gpu_memory_usage
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.config import omega_conf_to_dataclass
 from verl.workers.config import HFModelConfig, RolloutConfig
-from verl.workers.fsdp_workers import ActorRolloutRefWorker
+from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
 
 logger = logging.getLogger(__name__)
 
@@ -98,3 +98,16 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
         _ = global_steps
         await self.rollout_mode()
         return True
+
+
+class OneRecAsyncActorRolloutRefWorker(AsyncActorRolloutRefWorker):
+    """Async worker that ensures two-stage async rollout is registry-visible."""
+
+    def _build_rollout(self, trust_remote_code: bool = False):
+        if self.config.rollout.name == "two_stage":
+            from verl.workers.rollout import base as rollout_base
+
+            rollout_base._ROLLOUT_REGISTRY[("two_stage", "async")] = (
+                "verl.workers.rollout.vllm_rollout.vllm_rollout.ServerAdapter"
+            )
+        return super()._build_rollout(trust_remote_code=trust_remote_code)

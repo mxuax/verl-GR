@@ -185,9 +185,7 @@ class OpenOneRecAgentLoopWorker(AgentLoopWorker):
             )
 
         outputs = await asyncio.gather(*tasks)
-        output = self._postprocess(
-            outputs, input_non_tensor_batch=batch.non_tensor_batch, validate=batch.meta_info.get("validate", False)
-        )
+        output = self._postprocess(outputs, input_non_tensor_batch=batch.non_tensor_batch)
         return output
 
 

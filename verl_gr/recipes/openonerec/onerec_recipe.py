@@ -11,7 +11,7 @@ from typing import Any, Optional
 import datasets
 import numpy as np
 import torch
-from omegaconf import DictConfig, ListConfig
+from omegaconf import DictConfig, ListConfig, open_dict
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
 import verl.utils.torch_functional as verl_F
@@ -465,15 +465,18 @@ class OneRecTask:
         beam_size = int(custom_cfg.get("stage2_beam_size", 32))
         base_train_n = int(rollout_cfg.get("n", 1))
         rollout_cfg["n"] = base_train_n * beam_size
-        custom_cfg["_two_stage_base_train_n"] = base_train_n
+        with open_dict(custom_cfg):
+            custom_cfg["_two_stage_base_train_n"] = base_train_n
 
         val_kwargs = rollout_cfg.get("val_kwargs")
         if val_kwargs is not None:
             base_val_n = int(val_kwargs.get("n", 1))
             val_kwargs["n"] = base_val_n * beam_size
-            custom_cfg["_two_stage_base_val_n"] = base_val_n
+            with open_dict(custom_cfg):
+                custom_cfg["_two_stage_base_val_n"] = base_val_n
 
-        custom_cfg["_two_stage_counts_expanded"] = True
+        with open_dict(custom_cfg):
+            custom_cfg["_two_stage_counts_expanded"] = True
 
     @staticmethod
     def get_reward_model_cfg(config):
@@ -504,20 +507,28 @@ class OneRecTask:
                 import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
                 "OneRecActorRolloutRefWorker",
             )
-            # one_rec_async_actor_rollout_ref_worker = getattr(
-            #     import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
-            #     "OneRecAsyncActorRolloutRefWorker",
-            # )
-            async_actor_rollout_ref_worker = AsyncActorRolloutRefWorker
+            one_rec_async_actor_rollout_ref_worker = getattr(
+                import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                "OneRecAsyncActorRolloutRefWorker",
+            )
+            async_actor_rollout_ref_worker = one_rec_async_actor_rollout_ref_worker
             if config.actor_rollout_ref.rollout.get("name") == "two_stage":
                 # Agent loop in verl>=0.7 resolves rollout backend via RolloutReplicaRegistry.
                 # Register a real async two-stage replica instead of aliasing to plain vLLM.
+                from verl.workers.rollout import base as rollout_base
+
                 RolloutReplicaRegistry = getattr(import_module("verl.workers.rollout.replica"), "RolloutReplicaRegistry")
                 TwoStagevLLMReplica = getattr(
                     import_module("verl_gr.workers.rollout.two_stage_vllm_async"),
                     "TwoStagevLLMReplica",
                 )
                 RolloutReplicaRegistry.register("two_stage", lambda: TwoStagevLLMReplica)
+                # FSDP worker initialization also validates rollout names via
+                # verl.workers.rollout.base.get_rollout_class(name, mode).
+                # Map two_stage/async to the standard async vLLM ServerAdapter.
+                rollout_base._ROLLOUT_REGISTRY[("two_stage", "async")] = (
+                    "verl.workers.rollout.vllm_rollout.vllm_rollout.ServerAdapter"
+                )
                 config.actor_rollout_ref.rollout.agent.agent_loop_manager_class = (
                     "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager"
                 )
