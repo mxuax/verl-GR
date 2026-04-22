@@ -514,10 +514,18 @@ class OneRecTask:
                 rollout_registry[("two_stage", "async")] = (
                     "verl_gr.workers.rollout.two_stage_vllm_rollout.TwoStagevLLMRollout"
                 )
-                config.actor_rollout_ref.rollout.agent.agent_loop_manager_class = (
-                    "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager"
+                OmegaConf.update(
+                    config,
+                    "actor_rollout_ref.rollout.agent.agent_loop_manager_class",
+                    "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager",
+                    force_add=True,
                 )
-                config.actor_rollout_ref.rollout.agent.default_agent_loop = "openonerec_two_stage_agent"
+                OmegaConf.update(
+                    config,
+                    "actor_rollout_ref.rollout.agent.default_agent_loop",
+                    "openonerec_two_stage_agent",
+                    force_add=True,
+                )
             critic_worker = TrainingWorker
             actor_rollout_cls = actor_rollout_ref_worker
         elif config.actor_rollout_ref.actor.strategy == "megatron":
