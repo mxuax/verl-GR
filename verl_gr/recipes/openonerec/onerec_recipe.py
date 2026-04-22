@@ -526,11 +526,20 @@ class OneRecTask:
                     "openonerec_two_stage_agent",
                     force_add=True,
                 )
+                actor_rollout_ref_worker = getattr(
+                    import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                    "OneRecActorRolloutRefWorker",
+                )
             critic_worker = TrainingWorker
             actor_rollout_cls = actor_rollout_ref_worker
         elif config.actor_rollout_ref.actor.strategy == "megatron":
             ray_worker_group_cls = RayWorkerGroup
             actor_rollout_cls = ActorRolloutRefWorker
+            if config.actor_rollout_ref.rollout.get("name") == "two_stage":
+                actor_rollout_cls = getattr(
+                    import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                    "OneRecActorRolloutRefWorker",
+                )
             critic_worker = TrainingWorker
         else:
             raise NotImplementedError(f"Unknown strategy: {config.actor_rollout_ref.actor.strategy}")
