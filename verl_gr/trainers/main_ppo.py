@@ -2,15 +2,25 @@
 
 import os
 from pathlib import Path
+from pprint import pprint
 
 import hydra
 import ray
 from omegaconf import OmegaConf
 
-from verl.trainer.main_ppo import auto_set_device, create_rl_dataset, create_rl_sampler, migrate_legacy_reward_impl, run_ppo as base_run_ppo
+from verl.trainer.main_ppo import (
+    TaskRunner as BaseTaskRunner,
+    auto_set_device,
+    create_rl_dataset,
+    create_rl_sampler,
+    migrate_legacy_reward_impl,
+    run_ppo as base_run_ppo,
+)
+from verl.trainer.ppo.ray_trainer import Role
+from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.dataset.rl_dataset import collate_fn
 from verl_gr.recipes.openonerec.onerec_recipe import OneRecTask
-from verl_gr.trainers.rl_trainer import RLTrainer, ResourcePoolManager, Role
+from verl_gr.trainers.rl_trainer import RLTrainer
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr" / "openonerec"
 
@@ -19,46 +29,63 @@ def _build_main():
     task_impl = OneRecTask()
 
     @ray.remote(num_cpus=1)
-    class TaskRunner:
+    class TaskRunner(BaseTaskRunner):
+        def __init__(self):
+            super().__init__()
+
         def run(self, config):
             task_impl.sanitize_fsdp2_wrap_policy(config)
+            pprint(OmegaConf.to_container(config, resolve=True))
             OmegaConf.resolve(config)
             prepared = task_impl.prepare(config)
             tokenizer = prepared["tokenizer"]
             processor = prepared["processor"]
             actor_rollout_cls = prepared["actor_rollout_cls"]
-            critic_worker = prepared["critic_worker"]
-            reward_model_worker = prepared["reward_model_worker"]
-            reward_model_cfg = prepared["reward_model_cfg"]
             ray_worker_group_cls = prepared["ray_worker_group_cls"]
 
-            n_gpus_per_node = config.trainer.n_gpus_per_node
-            nnodes = config.trainer.nnodes
-            global_pool_id = "global_pool"
-            resource_pool_spec = {global_pool_id: [n_gpus_per_node] * nnodes}
-            role_worker_mapping = {Role.ActorRollout: ray.remote(actor_rollout_cls)}
-            mapping = {Role.ActorRollout: global_pool_id}
-            if config.critic.get("enable", True):
-                role_worker_mapping[Role.Critic] = ray.remote(critic_worker)
-                mapping[Role.Critic] = global_pool_id
-            if reward_model_cfg is not None and reward_model_cfg.get("enable", False) and reward_model_worker is not None:
-                role_worker_mapping[Role.RewardModel] = ray.remote(reward_model_worker)
-                mapping[Role.RewardModel] = global_pool_id
-            if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
-                role_worker_mapping[Role.RefPolicy] = ray.remote(actor_rollout_cls)
-                mapping[Role.RefPolicy] = global_pool_id
+            lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
+            if lora_rank <= 0:
+                lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
+            ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
+            if need_reference_policy(config) and not ref_in_actor:
+                actor_role = Role.ActorRolloutRef
+            else:
+                actor_role = Role.ActorRollout
+            self.role_worker_mapping[actor_role] = ray.remote(actor_rollout_cls)
+            self.mapping[actor_role] = "global_pool"
 
-            resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
+            if need_critic(config):
+                self.add_critic_worker(config)
 
-            train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor, is_train=True)
-            val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor, is_train=False)
+            self.add_reward_model_resource_pool(config)
+            self.add_teacher_model_resource_pool(config)
+            self.add_ref_policy_worker(config, actor_rollout_cls)
+
+            resource_pool_manager = self.init_resource_pool_mgr(config)
+
+            train_dataset = create_rl_dataset(
+                config.data.train_files,
+                config.data,
+                tokenizer,
+                processor,
+                is_train=True,
+                max_samples=config.data.get("train_max_samples", -1),
+            )
+            val_dataset = create_rl_dataset(
+                config.data.val_files,
+                config.data,
+                tokenizer,
+                processor,
+                is_train=False,
+                max_samples=config.data.get("val_max_samples", -1),
+            )
             train_sampler = create_rl_sampler(config.data, train_dataset)
 
             trainer = RLTrainer(
                 config=config,
                 tokenizer=tokenizer,
                 processor=processor,
-                role_worker_mapping=role_worker_mapping,
+                role_worker_mapping=self.role_worker_mapping,
                 resource_pool_manager=resource_pool_manager,
                 ray_worker_group_cls=ray_worker_group_cls,
                 train_dataset=train_dataset,

@@ -313,3 +313,6 @@ class TwoStagevLLMReplica(vLLMReplica):
     ):
         super().__init__(replica_rank, config, model_config, gpus_per_node, is_reward_model, is_teacher_model)
         self.server_class = ray.remote(TwoStagevLLMHttpServer)
+
+    def _get_server_name_prefix(self) -> str:
+        return "two_stage_"
