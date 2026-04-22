@@ -8,7 +8,11 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase
 from verl.trainer.ppo.ray_trainer import Role, ResourcePoolManager
 from verl.utils.torch_functional import masked_mean
 
-from verl_gr.recipes.openonerec.onerec_trainer import openonerec_validate
+from verl_gr.recipes.openonerec.onerec_trainer import (
+    openonerec_dump_generations,
+    openonerec_maybe_log_val_generations,
+    openonerec_validate,
+)
 
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
 
@@ -109,7 +113,7 @@ class RLTrainer(RayPPOTrainerBase):
         position_ids, DataProto.union() asserts on key collisions. For OneRec dataset,
         we remove those prompt tensors before generation and keep reward-routing keys.
         """
-        reward_keys = set({"source", "data_source", "reward_model", "extra_info", "uid"}) & batch.non_tensor_batch.keys()
+        reward_keys = set({"source", "data_source", "reward_model", "uid"}) & batch.non_tensor_batch.keys()
         batch_keys_to_pop = [
             key for key in ("input_ids", "attention_mask", "position_ids") if key in batch.batch.keys()
         ]
@@ -120,8 +124,37 @@ class RLTrainer(RayPPOTrainerBase):
         )
         gen_batch.non_tensor_batch.update(batch.non_tensor_batch)
         self._ensure_reward_routing_keys(gen_batch)
+        rollout_cfg = self.config.actor_rollout_ref.rollout
+        if rollout_cfg.get("name") == "two_stage":
+            rollout_custom = rollout_cfg.get("custom") or {}
+            gen_batch.meta_info.update(
+                {
+                    "enable_two_stage_rollout": True,
+                    "stage1_max_tokens": rollout_custom.get(
+                        "stage1_max_tokens",
+                        self.config.data.get("max_response_length", rollout_cfg.response_length),
+                    ),
+                    "stage2_beam_size": rollout_custom.get("stage2_beam_size", 32),
+                    "stage2_num_tokens": rollout_custom.get("stage2_num_tokens", 3),
+                    "max_tokens": self.config.data.get("max_response_length", rollout_cfg.response_length),
+                }
+            )
         return gen_batch
 
     def _validate(self):
         return openonerec_validate(self)
+
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
+        return openonerec_dump_generations(
+            self,
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=dump_path,
+            ground_truths=ground_truths,
+        )
+
+    def _maybe_log_val_generations(self, inputs, outputs, scores):
+        return openonerec_maybe_log_val_generations(self, inputs=inputs, outputs=outputs, scores=scores)
 

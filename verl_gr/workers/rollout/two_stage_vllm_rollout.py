@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from importlib import import_module
+import logging
 
 import torch
 
 from verl import DataProto
-
 from verl_gr.third_party.vllm import BeamSearchParams, LoRARequest
 from verl_gr.workers.rollout.primitives import (
     build_lora_requests,
@@ -17,20 +17,43 @@ from verl_gr.workers.rollout.primitives import (
     prepare_prompt_token_inputs,
 )
 
-try:
-    rollout_spmd_module = import_module("verl.workers.rollout.vllm_rollout.vllm_rollout_spmd")
-except ModuleNotFoundError as exc:
-    raise ImportError(
-        "Legacy vLLM SPMD rollout symbols are not available in the current verl install. "
-        "OpenOneRec two-stage rollout still depends on this path."
-    ) from exc
+logger = logging.getLogger(__name__)
 
-vLLMRollout = getattr(rollout_spmd_module, "vLLMRollout")
-_pre_process_inputs = getattr(rollout_spmd_module, "_pre_process_inputs")
+ServerAdapter = getattr(import_module("verl.workers.rollout.vllm_rollout.vllm_rollout"), "ServerAdapter")
 
 
-class TwoStagevLLMRollout(vLLMRollout):
+def _read_rollout_custom_value(config, key: str, default):
+    custom = getattr(config, "custom", None)
+    if isinstance(custom, dict):
+        return custom.get(key, default)
+    if custom is None:
+        return default
+    try:
+        return custom.get(key, default)
+    except AttributeError:
+        return default
+
+
+class TwoStagevLLMRollout(ServerAdapter):
     """Generate CoT first, then beam-search item outputs."""
+
+    def __init__(self, *args, **kwargs):
+        if {"config", "model_config", "device_mesh"}.issubset(kwargs):
+            super().__init__(
+                config=kwargs["config"],
+                model_config=kwargs["model_config"],
+                device_mesh=kwargs["device_mesh"],
+                replica_rank=kwargs.get("replica_rank", -1),
+            )
+            logger.warning(
+                "TwoStagevLLMRollout is running in async adapter mode on verl>=0.7.1. "
+                "Two-stage generation logic must be implemented in async agent-loop flow."
+            )
+            return
+
+        raise RuntimeError(
+            "TwoStagevLLMRollout async adapter requires kwargs: config, model_config, device_mesh."
+        )
 
     @torch.no_grad()
     def _two_stage_generation(self, prompts: DataProto, **kwargs) -> DataProto:
@@ -43,14 +66,14 @@ class TwoStagevLLMRollout(vLLMRollout):
         prepared_inputs = prepare_prompt_token_inputs(
             prompts,
             pad_token_id=self.pad_token_id,
-            preprocess_inputs=_pre_process_inputs,
+            preprocess_inputs=None,
         )
         vllm_inputs = prepared_inputs.vllm_inputs
         non_tensor_batch = prepared_inputs.non_tensor_batch
 
         stage1_max_tokens = kwargs.get(
             "stage1_max_tokens",
-            getattr(self.config, "stage1_max_tokens", kwargs.get("max_tokens", 1024)),
+            _read_rollout_custom_value(self.config, "stage1_max_tokens", kwargs.get("max_tokens", 1024)),
         )
         cot_sampling_params = build_sampling_params(
             max_tokens=stage1_max_tokens,
@@ -92,10 +115,16 @@ class TwoStagevLLMRollout(vLLMRollout):
                 stage2_input["multi_modal_data"] = vllm_inputs[i]["multi_modal_data"]
             stage2_inputs.append(stage2_input)
 
-        beam_width = kwargs.get("stage2_beam_size", getattr(self.config, "stage2_beam_size", 32))
+        beam_width = kwargs.get(
+            "stage2_beam_size",
+            _read_rollout_custom_value(self.config, "stage2_beam_size", 32),
+        )
         max_tokens_item = kwargs.get(
             "stage2_max_tokens",
-            kwargs.get("stage2_num_tokens", getattr(self.config, "stage2_num_tokens", 16)),
+            kwargs.get(
+                "stage2_num_tokens",
+                _read_rollout_custom_value(self.config, "stage2_num_tokens", 16),
+            ),
         )
         if BeamSearchParams is None:
             raise ImportError("BeamSearchParams not available; cannot run stage-2 beam search.")
@@ -127,8 +156,12 @@ class TwoStagevLLMRollout(vLLMRollout):
             non_tensor_batch=expansion.non_tensor_batch,
         )
 
-    @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
+        if not hasattr(self, "inference_engine"):
+            raise NotImplementedError(
+                "TwoStagevLLMRollout.generate_sequences() requires inference_engine and is "
+                "typically bypassed in verl>=0.7.1 async server mode."
+            )
         for key in [
             "max_tokens",
             "temperature",
@@ -144,3 +177,15 @@ class TwoStagevLLMRollout(vLLMRollout):
             if key in prompts.meta_info:
                 kwargs[key] = prompts.meta_info[key]
         return self._two_stage_generation(prompts, **kwargs)
+
+    async def resume(self, tags: list[str]):
+        """Lifecycle hook required by BaseRollout in verl>=0.7.x."""
+        await super().resume(tags=tags)
+
+    async def update_weights(self, weights, global_steps: int = None, **kwargs):
+        """Delegate weight sync to ServerAdapter async transport."""
+        await super().update_weights(weights=weights, global_steps=global_steps, **kwargs)
+
+    async def release(self):
+        """Lifecycle hook required by BaseRollout in verl>=0.7.x."""
+        await super().release()

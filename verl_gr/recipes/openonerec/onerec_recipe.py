@@ -1,5 +1,6 @@
 import ast
 import copy
+import functools
 import logging
 import os
 import re
@@ -10,7 +11,7 @@ from typing import Any, Optional
 import datasets
 import numpy as np
 import torch
-from omegaconf import DictConfig, ListConfig
+from omegaconf import DictConfig, ListConfig, open_dict
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
 import verl.utils.torch_functional as verl_F
@@ -53,6 +54,49 @@ def collate_fn(samples: list[dict[str, Any]]) -> dict[str, Any]:
     for key, value in non_tensors.items():
         batch[key] = np.array(value, dtype=object)
     return batch
+
+
+def extract_prompt_fields(
+    row: dict[str, Any],
+    *,
+    prompt_key: str,
+    enable_think: bool,
+    enable_nonthink: bool,
+) -> dict[str, Any]:
+    raw_messages = row.get("messages")
+    if isinstance(raw_messages, str):
+        messages = ast.literal_eval(raw_messages)
+    else:
+        messages = raw_messages or []
+
+    clean_chats = [
+        {
+            "role": message.get("role"),
+            "content": "".join(
+                segment.get("text", "")
+                for segment in message.get("content", [])
+                if segment.get("type") == "text"
+            ),
+        }
+        for message in messages
+    ]
+    if not clean_chats:
+        raise ValueError("Sample has empty messages; please check data integrity.")
+
+    prompt_messages = clean_chats[:-1]
+    if enable_think:
+        for message in prompt_messages:
+            if message["role"] == "user":
+                message["content"] = message["content"] + "/think"
+    if enable_nonthink:
+        for message in prompt_messages:
+            if message["role"] == "user":
+                message["content"] = message["content"] + "/no_think"
+
+    ground_truth_message = clean_chats[-1]["content"]
+    row[prompt_key] = prompt_messages
+    row["reward_model"] = {"ground_truth": ground_truth_message, "style": "rule"}
+    return row
 
 
 class OneRecDataset(Dataset):
@@ -132,49 +176,40 @@ class OneRecDataset(Dataset):
             self.dataframe = self.dataframe.select(indices.tolist())
             print(f"selected {self.max_samples} random samples out of {len(self.dataframe)}")
 
-        self.dataframe = self.dataframe.map(
-            self._extract_prompt_fields,
-            num_proc=self.num_workers,
-            desc="Extract prompts and reward annotations",
+        extract_fn = functools.partial(
+            extract_prompt_fields,
+            prompt_key=self.prompt_key,
+            enable_think=self.enable_think,
+            enable_nonthink=self.enable_nonthink,
         )
+        try:
+            self.dataframe = self.dataframe.map(
+                extract_fn,
+                num_proc=self.num_workers,
+                desc="Extract prompts and reward annotations",
+            )
+        except TypeError as exc:
+            if "cannot pickle" not in str(exc):
+                raise
+            logger.warning(
+                "Falling back to single-process map due to pickle error: %s",
+                exc,
+            )
+            self.dataframe = self.dataframe.map(
+                extract_fn,
+                num_proc=None,
+                desc="Extract prompts and reward annotations",
+            )
         logger.info("processed dataset len: %s", len(self.dataframe))
         self.dataframe = self.maybe_filter_out_long_prompts(self.dataframe)
 
     def _extract_prompt_fields(self, row: dict[str, Any]) -> dict[str, Any]:
-        raw_messages = row.get("messages")
-        if isinstance(raw_messages, str):
-            messages = ast.literal_eval(raw_messages)
-        else:
-            messages = raw_messages or []
-
-        clean_chats = [
-            {
-                "role": message.get("role"),
-                "content": "".join(
-                    segment.get("text", "")
-                    for segment in message.get("content", [])
-                    if segment.get("type") == "text"
-                ),
-            }
-            for message in messages
-        ]
-        if not clean_chats:
-            raise ValueError("Sample has empty messages; please check data integrity.")
-
-        prompt_messages = clean_chats[:-1]
-        if self.enable_think:
-            for message in prompt_messages:
-                if message["role"] == "user":
-                    message["content"] = message["content"] + "/think"
-        if self.enable_nonthink:
-            for message in prompt_messages:
-                if message["role"] == "user":
-                    message["content"] = message["content"] + "/no_think"
-
-        ground_truth_message = clean_chats[-1]["content"]
-        row[self.prompt_key] = prompt_messages
-        row["reward_model"] = {"ground_truth": ground_truth_message, "style": "rule"}
-        return row
+        return extract_prompt_fields(
+            row,
+            prompt_key=self.prompt_key,
+            enable_think=self.enable_think,
+            enable_nonthink=self.enable_nonthink,
+        )
 
     def maybe_filter_out_long_prompts(self, dataframe: datasets.Dataset) -> datasets.Dataset:
         if not self.filter_overlong_prompts:
@@ -205,11 +240,25 @@ class OneRecDataset(Dataset):
                 messages = doc[prompt_key]
                 return len(tokenizer.apply_chat_template(messages, add_generation_prompt=True))
 
-        filtered = dataframe.filter(
-            lambda doc: doc_length(doc) <= self.max_prompt_length - 10,
-            num_proc=self.num_workers,
-            desc=f"Filtering prompts longer than {self.max_prompt_length - 10} tokens",
-        )
+        filter_fn = lambda doc: doc_length(doc) <= self.max_prompt_length - 10
+        try:
+            filtered = dataframe.filter(
+                filter_fn,
+                num_proc=self.num_workers,
+                desc=f"Filtering prompts longer than {self.max_prompt_length - 10} tokens",
+            )
+        except TypeError as exc:
+            if "cannot pickle" not in str(exc):
+                raise
+            logger.warning(
+                "Falling back to single-process filter due to pickle error: %s",
+                exc,
+            )
+            filtered = dataframe.filter(
+                filter_fn,
+                num_proc=None,
+                desc=f"Filtering prompts longer than {self.max_prompt_length - 10} tokens",
+            )
         logger.info("filtered dataset len: %s", len(filtered))
         return filtered
 
@@ -400,6 +449,36 @@ class OneRecTask:
                 wrap_policy["transformer_layer_cls_to_wrap"] = normalized
 
     @staticmethod
+    def _expand_two_stage_rollout_counts(config) -> None:
+        rollout_cfg = config.actor_rollout_ref.rollout
+        if rollout_cfg.get("name") != "two_stage":
+            return
+
+        custom_cfg = rollout_cfg.get("custom")
+        if custom_cfg is None:
+            custom_cfg = {}
+            rollout_cfg["custom"] = custom_cfg
+
+        if custom_cfg.get("_two_stage_counts_expanded", False):
+            return
+
+        beam_size = int(custom_cfg.get("stage2_beam_size", 32))
+        base_train_n = int(rollout_cfg.get("n", 1))
+        rollout_cfg["n"] = base_train_n * beam_size
+        with open_dict(custom_cfg):
+            custom_cfg["_two_stage_base_train_n"] = base_train_n
+
+        val_kwargs = rollout_cfg.get("val_kwargs")
+        if val_kwargs is not None:
+            base_val_n = int(val_kwargs.get("n", 1))
+            val_kwargs["n"] = base_val_n * beam_size
+            with open_dict(custom_cfg):
+                custom_cfg["_two_stage_base_val_n"] = base_val_n
+
+        with open_dict(custom_cfg):
+            custom_cfg["_two_stage_counts_expanded"] = True
+
+    @staticmethod
     def get_reward_model_cfg(config):
         reward_root = config.get("reward")
         if reward_root is not None and reward_root.get("reward_model") is not None:
@@ -410,6 +489,7 @@ class OneRecTask:
         return None
 
     def prepare(self, config) -> dict[str, Any]:
+        self._expand_two_stage_rollout_counts(config)
         reward_model_cfg = self.get_reward_model_cfg(config)
         local_path = copy_to_local(
             config.actor_rollout_ref.model.path,
@@ -427,7 +507,32 @@ class OneRecTask:
                 import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
                 "OneRecActorRolloutRefWorker",
             )
-            async_actor_rollout_ref_worker = AsyncActorRolloutRefWorker
+            one_rec_async_actor_rollout_ref_worker = getattr(
+                import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                "OneRecAsyncActorRolloutRefWorker",
+            )
+            async_actor_rollout_ref_worker = one_rec_async_actor_rollout_ref_worker
+            if config.actor_rollout_ref.rollout.get("name") == "two_stage":
+                # Agent loop in verl>=0.7 resolves rollout backend via RolloutReplicaRegistry.
+                # Register a real async two-stage replica instead of aliasing to plain vLLM.
+                from verl.workers.rollout import base as rollout_base
+
+                RolloutReplicaRegistry = getattr(import_module("verl.workers.rollout.replica"), "RolloutReplicaRegistry")
+                TwoStagevLLMReplica = getattr(
+                    import_module("verl_gr.workers.rollout.two_stage_vllm_async"),
+                    "TwoStagevLLMReplica",
+                )
+                RolloutReplicaRegistry.register("two_stage", lambda: TwoStagevLLMReplica)
+                # FSDP worker initialization also validates rollout names via
+                # verl.workers.rollout.base.get_rollout_class(name, mode).
+                # Map two_stage/async to the standard async vLLM ServerAdapter.
+                rollout_base._ROLLOUT_REGISTRY[("two_stage", "async")] = (
+                    "verl.workers.rollout.vllm_rollout.vllm_rollout.ServerAdapter"
+                )
+                config.actor_rollout_ref.rollout.agent.agent_loop_manager_class = (
+                    "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager"
+                )
+                config.actor_rollout_ref.rollout.agent.default_agent_loop = "openonerec_two_stage_agent"
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
             if use_legacy_worker_impl in {"auto", "enable"}:
                 from verl.workers.fsdp_workers import CriticWorker
@@ -491,6 +596,20 @@ class OneRecTask:
 SLOT_PATTERN = re.compile(r"<s_a_(\d+)><s_b_(\d+)><s_c_(\d+)>")
 
 
+def _extract_sid_region(prediction: str) -> str:
+    """Extract the region that should contain SID tuples.
+
+    In two-stage rollout, decoded responses may not always include an opening
+    `<think>` token, but they usually include `</think>` before SID tokens.
+    """
+    if not isinstance(prediction, str):
+        return ""
+    think_end = prediction.find("</think>")
+    if think_end != -1:
+        return prediction[think_end + len("</think>") :]
+    return prediction
+
+
 def _extract_all_tuples(text: Any) -> list[tuple[str, str, str]]:
     if not isinstance(text, str):
         logger.warning("_extract_all_tuples received non-string input: %s", type(text))
@@ -512,7 +631,7 @@ def think_format_reward(prediction: str) -> float:
 
 
 def partial_hit_reward(prediction: str, ground_truth: str) -> float:
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
         return 0.0
@@ -531,12 +650,7 @@ def partial_hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def hit_reward(prediction: str, ground_truth: str) -> float:
-    if "</think>" in prediction and "<think>" in prediction:
-        think_end_idx = prediction.find("</think>") + len("</think>")
-        prediction = prediction[think_end_idx:]
-    else:
-        return 0.0
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
         return 0.0
@@ -546,12 +660,7 @@ def hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def first_sid_hit_reward(prediction: str, ground_truth: str) -> float:
-    if "</think>" in prediction and "<think>" in prediction:
-        think_end_idx = prediction.find("</think>") + len("</think>")
-        prediction = prediction[think_end_idx:]
-    else:
-        return 0.0
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     if not pred_tuples:
         return 0.0
     first_pred_tuple = pred_tuples[0]
@@ -563,7 +672,7 @@ def first_sid_hit_reward(prediction: str, ground_truth: str) -> float:
 
 
 def pass_rate(prediction: str, ground_truth: str) -> float:
-    pred_tuples = _extract_all_tuples(prediction)
+    pred_tuples = _extract_all_tuples(_extract_sid_region(prediction))
     gt_tuples = _extract_all_tuples(ground_truth)
     if not pred_tuples or not gt_tuples:
         return 0.0
@@ -584,6 +693,7 @@ def compute_score(
     hit_reward_value = hit_reward(prediction, ground_truth)
     pass_rate_value = pass_rate(prediction, ground_truth)
     pass_at_1_value = first_sid_hit_reward(prediction, ground_truth)
+
     return {
         "score": pass_at_1_value,
         "format_reward": format_reward_value,

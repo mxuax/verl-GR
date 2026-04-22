@@ -48,3 +48,9 @@ cd verl-GR
 export BASE_MODEL=/path/to/your/model
 bash scripts/run_openonerec_grpo.sh
 ```
+
+## Two-Stage Notes
+
+- OpenOneRec `two_stage` is implemented entirely inside `verl-GR`.
+- The async path uses `verl_gr/recipes/openonerec/two_stage_agent_loop.py` together with `verl_gr/workers/rollout/two_stage_vllm_async.py`.
+- No local source patch to the upstream `verl` repo is required or expected.

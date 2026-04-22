@@ -74,10 +74,10 @@ checkpoints/
 ckpt/
 
 # Data
-# *.parquet
-# *.csv
-# *.json
-# *.jsonl
+*.parquet
+*.csv
+*.json
+*.jsonl
 
 # Ray
 ray_results/

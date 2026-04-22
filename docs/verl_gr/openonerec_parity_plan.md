@@ -9,6 +9,8 @@ This checklist tracks old-vs-new behavior parity for the cleaned-up Phase B runt
 - [x] Legacy role-worker mapping is represented in OpenOneRec worker modules under `recipes/openonerec`
 - [x] Two-stage rollout route resolves to the OneRec custom FSDP worker mapping
 - [x] Two-stage rollout implementation lives under `workers/rollout` instead of the removed `components` layer
+- [x] Async two-stage request grouping is implemented from `verl-GR` custom agent-loop classes
+- [x] No local patch to upstream `verl` is required for OpenOneRec two-stage wiring
 
 ## Runtime/Worker Assumptions
 
@@ -16,6 +18,7 @@ This checklist tracks old-vs-new behavior parity for the cleaned-up Phase B runt
 - Cluster init and `fit()` execution follow the launcher/main trainer path.
 - OpenOneRec-specific preparation stays under `recipes/openonerec`.
 - Worker route strings intentionally mirror OpenOneRec legacy names for traceability.
+- The async route is allowed to add a small `verl`-API-shaped shim inside `verl-GR` when upstream extension points are too coarse.
 
 ## Validation Gate (Smoke)
 
