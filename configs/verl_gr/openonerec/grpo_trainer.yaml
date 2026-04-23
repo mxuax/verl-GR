@@ -96,6 +96,8 @@ actor_rollout_ref:
           max_tokens: 3
     agent:
       num_workers: 8
+      agent_loop_manager_class: verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager
+      default_agent_loop: openonerec_two_stage_agent
     engine_kwargs:
       vllm:
         max_logprobs: 320

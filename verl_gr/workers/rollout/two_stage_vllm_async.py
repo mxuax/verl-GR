@@ -23,7 +23,6 @@ from verl.workers.rollout.vllm_rollout.utils import (
     VLLM_LORA_INT_ID,
     VLLM_LORA_NAME,
     VLLM_LORA_PATH,
-    extract_prompt_logprobs,
 )
 from verl.workers.rollout.vllm_rollout.vllm_async_server import (
     LoRARequest,
@@ -167,6 +166,16 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
             config=self.config,
             response_length=sampling_params.get("max_tokens", self.config.response_length),
         )
+        stage2_temperature = float(
+            sampling_params.pop(
+                "stage2_temperature",
+                _read_rollout_custom_value(self.config, "stage2_temperature", 0.0),
+            )
+        )
+        if beam_width > 1 and stage2_temperature <= 0.0:
+            # vLLM treats temperature==0 as greedy sampling, which requires n==1.
+            # Auto-bump temperature when requesting multiple stage-2 candidates.
+            stage2_temperature = 1.0
 
         stage1_params = SamplingParams(
             max_tokens=max(0, min(decode_config.reasoning.max_tokens, self.config.max_model_len - len(prompt_ids))),

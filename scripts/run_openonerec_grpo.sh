@@ -26,18 +26,6 @@ BASE_MODEL="${BASE_MODEL:-/path/to/your/model}"
 BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
-if [[ "${FSDP_STRATEGY}" == "fsdp2" ]]; then
-  # For verl 0.7.1 + fsdp2, the non-fused actor path can hit inplace-view
-  # autograd errors (logits.div_). Prefer fused kernels with torch backend.
-  USE_FUSED_KERNELS="${USE_FUSED_KERNELS:-True}"
-  USE_REMOVE_PADDING="${USE_REMOVE_PADDING:-True}"
-  FUSED_KERNEL_IMPL_BACKEND="${FUSED_KERNEL_IMPL_BACKEND:-torch}"
-else
-  USE_FUSED_KERNELS="${USE_FUSED_KERNELS:-False}"
-  USE_REMOVE_PADDING="${USE_REMOVE_PADDING:-False}"
-  FUSED_KERNEL_IMPL_BACKEND="${FUSED_KERNEL_IMPL_BACKEND:-torch}"
-fi
-
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-True}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
 ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-512}"
@@ -59,7 +47,7 @@ AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-${N_GPUS:-1}}"
 ENABLE_THINK="${ENABLE_THINK:-True}"
 ENABLE_NONTHINK="${ENABLE_NONTHINK:-False}"
 USE_FORCE_PREFIX="${USE_FORCE_PREFIX:-False}"
-DATA_DIR="${VERL_GR_ROOT}/verl_gr/recipes/openonerec/output/rl_data"
+DATA_DIR="${DATA_DIR:-${VERL_GR_ROOT}/verl_gr/recipes/openonerec/output/rl_data}"
 TRAIN_FILES="${TRAIN_FILES:-[${DATA_DIR}/train.parquet]}"
 VAL_FILES="${VAL_FILES:-[${DATA_DIR}/test.parquet]}"
 
@@ -103,6 +91,7 @@ echo "==================================="
 echo "Cluster: ${N_NODES} node(s) x ${N_GPUS} GPU(s)"
 echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}"
+echo "Max tokens per GPU: ${MAX_TOKENS_PER_GPU}"
 echo "Validation test_freq: ${TEST_FREQ}, log_val_generations: ${VAL_LOG_GENERATIONS}"
 echo "Agent loop workers: ${AGENT_LOOP_NUM_WORKERS}"
 echo "FSDP strategy: ${FSDP_STRATEGY}"
@@ -134,7 +123,12 @@ done
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.custom_cls.path="${OPENONEREC_RECIPE_PATH}" \
   custom_reward_function.path="${OPENONEREC_RECIPE_PATH}" \
+  actor_rollout_ref.actor.use_dynamic_bsz="${USE_DYNAMIC_BSZ}" \
+  actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.actor.ppo_mini_batch_size="${TRAIN_BATCH_SIZE}" \
+  actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
+  actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
+  actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.max_num_seqs="${ROLLOUT_MAX_NUM_SEQS}" \
   actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.enforce_eager="${ROLLOUT_ENFORCE_EAGER}" \
