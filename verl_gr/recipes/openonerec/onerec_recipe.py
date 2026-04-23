@@ -11,7 +11,7 @@ from typing import Any, Optional
 import datasets
 import numpy as np
 import torch
-from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, ListConfig, open_dict
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
 import verl.utils.torch_functional as verl_F
@@ -20,12 +20,7 @@ from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.dataset.vision_utils import process_image, process_video
 from verl.utils.fs import copy_to_local
 from verl.utils.model import compute_position_id_with_mask
-from verl.workers.engine_workers import ActorRolloutRefWorker, TrainingWorker
-from verl_gr.workers.rollout.beam_config import BEAM_WIDTH_KEY
-from verl_gr.workers.rollout.two_stage_registration import (
-    register_two_stage_replica,
-    register_two_stage_rollout_class,
-)
+from verl.workers.fsdp_workers import AsyncActorRolloutRefWorker
 
 logger = logging.getLogger(__name__)
 
@@ -415,9 +410,6 @@ class OneRecDataset(Dataset):
 class OneRecTask:
     """OpenOneRec task-specific runtime preparation logic."""
 
-    def __init__(self) -> None:
-        self._two_stage_counts_expanded = False
-
     @staticmethod
     def _normalize_layer_wrap_value(value):
         if isinstance(value, str):
@@ -464,18 +456,27 @@ class OneRecTask:
 
         custom_cfg = rollout_cfg.get("custom")
         if custom_cfg is None:
-            with open_dict(rollout_cfg):
-                rollout_cfg.custom = OmegaConf.create({})
-            custom_cfg = rollout_cfg.custom
+            custom_cfg = {}
+            rollout_cfg["custom"] = custom_cfg
 
-        beam_size = int(custom_cfg.get(BEAM_WIDTH_KEY, custom_cfg.get("stage2_beam_size", 32)))
+        if custom_cfg.get("_two_stage_counts_expanded", False):
+            return
+
+        beam_size = int(custom_cfg.get("stage2_beam_size", 32))
         base_train_n = int(rollout_cfg.get("n", 1))
         rollout_cfg["n"] = base_train_n * beam_size
+        with open_dict(custom_cfg):
+            custom_cfg["_two_stage_base_train_n"] = base_train_n
 
         val_kwargs = rollout_cfg.get("val_kwargs")
         if val_kwargs is not None:
             base_val_n = int(val_kwargs.get("n", 1))
             val_kwargs["n"] = base_val_n * beam_size
+            with open_dict(custom_cfg):
+                custom_cfg["_two_stage_base_val_n"] = base_val_n
+
+        with open_dict(custom_cfg):
+            custom_cfg["_two_stage_counts_expanded"] = True
 
     @staticmethod
     def get_reward_model_cfg(config):
@@ -488,9 +489,7 @@ class OneRecTask:
         return None
 
     def prepare(self, config) -> dict[str, Any]:
-        if not self._two_stage_counts_expanded:
-            self._expand_two_stage_rollout_counts(config)
-            self._two_stage_counts_expanded = True
+        self._expand_two_stage_rollout_counts(config)
         reward_model_cfg = self.get_reward_model_cfg(config)
         local_path = copy_to_local(
             config.actor_rollout_ref.model.path,
@@ -504,46 +503,91 @@ class OneRecTask:
 
         if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
             ray_worker_group_cls = RayWorkerGroup
-            actor_rollout_ref_worker = ActorRolloutRefWorker
+            one_rec_actor_rollout_ref_worker = getattr(
+                import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                "OneRecActorRolloutRefWorker",
+            )
+            one_rec_async_actor_rollout_ref_worker = getattr(
+                import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
+                "OneRecAsyncActorRolloutRefWorker",
+            )
+            async_actor_rollout_ref_worker = one_rec_async_actor_rollout_ref_worker
             if config.actor_rollout_ref.rollout.get("name") == "two_stage":
                 # Agent loop in verl>=0.7 resolves rollout backend via RolloutReplicaRegistry.
-                register_two_stage_replica()
-                register_two_stage_rollout_class()
-                OmegaConf.update(
-                    config,
-                    "actor_rollout_ref.rollout.agent.agent_loop_manager_class",
-                    "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager",
-                    force_add=True,
+                # Register a real async two-stage replica instead of aliasing to plain vLLM.
+                from verl.workers.rollout import base as rollout_base
+
+                RolloutReplicaRegistry = getattr(import_module("verl.workers.rollout.replica"), "RolloutReplicaRegistry")
+                TwoStagevLLMReplica = getattr(
+                    import_module("verl_gr.workers.rollout.two_stage_vllm_async"),
+                    "TwoStagevLLMReplica",
                 )
-                OmegaConf.update(
-                    config,
-                    "actor_rollout_ref.rollout.agent.default_agent_loop",
-                    "openonerec_two_stage_agent",
-                    force_add=True,
+                RolloutReplicaRegistry.register("two_stage", lambda: TwoStagevLLMReplica)
+                # FSDP worker initialization also validates rollout names via
+                # verl.workers.rollout.base.get_rollout_class(name, mode).
+                # Map two_stage/async to the standard async vLLM ServerAdapter.
+                rollout_base._ROLLOUT_REGISTRY[("two_stage", "async")] = (
+                    "verl.workers.rollout.vllm_rollout.vllm_rollout.ServerAdapter"
                 )
-                actor_rollout_ref_worker = getattr(
-                    import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
-                    "OneRecActorRolloutRefWorker",
+                config.actor_rollout_ref.rollout.agent.agent_loop_manager_class = (
+                    "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager"
                 )
-            critic_worker = TrainingWorker
-            actor_rollout_cls = actor_rollout_ref_worker
+                config.actor_rollout_ref.rollout.agent.default_agent_loop = "openonerec_two_stage_agent"
+            use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
+            if use_legacy_worker_impl in {"auto", "enable"}:
+                from verl.workers.fsdp_workers import CriticWorker
+            elif use_legacy_worker_impl == "disable":
+                from verl.workers.engine_workers import TrainingWorker as CriticWorker
+            else:
+                raise ValueError(f"Invalid use_legacy_worker_impl: {use_legacy_worker_impl}")
+            critic_worker = CriticWorker
+            actor_rollout_cls = (
+                async_actor_rollout_ref_worker
+                if config.actor_rollout_ref.rollout.mode == "async"
+                else one_rec_actor_rollout_ref_worker
+            )
         elif config.actor_rollout_ref.actor.strategy == "megatron":
-            ray_worker_group_cls = RayWorkerGroup
-            actor_rollout_cls = ActorRolloutRefWorker
-            if config.actor_rollout_ref.rollout.get("name") == "two_stage":
-                actor_rollout_cls = getattr(
-                    import_module("verl_gr.recipes.openonerec.onerec_fsdp_workers"),
-                    "OneRecActorRolloutRefWorker",
-                )
-            critic_worker = TrainingWorker
+            from verl.workers.megatron_workers import (
+                ActorRolloutRefWorker as MegatronActorRolloutRefWorker,
+                AsyncActorRolloutRefWorker as MegatronAsyncActorRolloutRefWorker,
+                CriticWorker as MegatronCriticWorker,
+            )
+
+            try:
+                from verl.single_controller.ray.megatron import NVMegatronRayWorkerGroup
+            except ModuleNotFoundError:
+                NVMegatronRayWorkerGroup = RayWorkerGroup
+            ray_worker_group_cls = NVMegatronRayWorkerGroup
+            actor_rollout_ref_worker = MegatronActorRolloutRefWorker
+            async_actor_rollout_ref_worker = MegatronAsyncActorRolloutRefWorker
+            critic_worker = MegatronCriticWorker
+            actor_rollout_cls = (
+                async_actor_rollout_ref_worker
+                if config.actor_rollout_ref.rollout.mode == "async"
+                else actor_rollout_ref_worker
+            )
         else:
             raise NotImplementedError(f"Unknown strategy: {config.actor_rollout_ref.actor.strategy}")
+
+        reward_model_worker = None
+        if reward_model_cfg is not None and reward_model_cfg.get("enable", False):
+            if reward_model_cfg.strategy in {"fsdp", "fsdp2"}:
+                from verl.workers.fsdp_workers import RewardModelWorker
+
+                reward_model_worker = RewardModelWorker
+            elif reward_model_cfg.strategy == "megatron":
+                from verl.workers.megatron_workers import RewardModelWorker as MegatronRewardModelWorker
+
+                reward_model_worker = MegatronRewardModelWorker
+            else:
+                raise NotImplementedError(f"Unknown reward model strategy: {reward_model_cfg.strategy}")
 
         return {
             "tokenizer": tokenizer,
             "processor": processor,
             "actor_rollout_cls": actor_rollout_cls,
             "critic_worker": critic_worker,
+            "reward_model_worker": reward_model_worker,
             "reward_model_cfg": reward_model_cfg,
             "ray_worker_group_cls": ray_worker_group_cls,
         }
