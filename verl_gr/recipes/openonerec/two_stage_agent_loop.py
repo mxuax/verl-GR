@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import ray
@@ -19,14 +20,18 @@ from verl.experimental.agent_loop.agent_loop import (
 from verl.experimental.agent_loop.single_turn_agent_loop import SingleTurnAgentLoop
 from verl.utils.profiler import simple_timer
 from verl.workers.rollout.replica import TokenOutput
-from verl_gr.workers.rollout.beam_config import (
-    BEAM_GROUP_ID_KEY,
-    BEAM_INDEX_KEY,
-    BEAM_WIDTH_KEY,
-    build_two_stage_sampling_params,
-    get_rollout_custom_nested_value,
-    get_rollout_custom_value,
-)
+
+
+def _read_rollout_custom_value(config, key: str, default):
+    custom = getattr(config, "custom", None)
+    if isinstance(custom, dict):
+        return custom.get(key, default)
+    if custom is None:
+        return default
+    try:
+        return custom.get(key, default)
+    except AttributeError:
+        return default
 
 
 @register("openonerec_two_stage_agent")
@@ -42,18 +47,18 @@ class OpenOneRecTwoStageAgentLoop(SingleTurnAgentLoop):
         videos = multi_modal_data.get("videos")
         prompt_ids = await self.apply_chat_template(messages, images=images, videos=videos)
 
-        beam_width = max(1, int(sampling_params.get(BEAM_WIDTH_KEY, 1)))
+        beam_width = max(1, int(sampling_params.get("stage2_beam_size", 1)))
         rollout_n = int(kwargs.get("trajectory_rollout_n", 0))
         stage1_sample_idx = rollout_n // beam_width
-        beam_index = rollout_n % beam_width
+        beam_idx = rollout_n % beam_width
         sample_index = kwargs.get("trajectory_sample_index", -1)
         step = kwargs.get("trajectory_step", -1)
         validate = int(bool(kwargs.get("trajectory_validate", False)))
 
         sampling_params["stage1_sample_idx"] = stage1_sample_idx
-        sampling_params[BEAM_INDEX_KEY] = beam_index
-        sampling_params[BEAM_GROUP_ID_KEY] = f"{step}:{validate}:{sample_index}:{stage1_sample_idx}"
-        request_id = sampling_params[BEAM_GROUP_ID_KEY]
+        sampling_params["beam_idx"] = beam_idx
+        sampling_params["two_stage_group_id"] = f"{step}:{validate}:{sample_index}:{stage1_sample_idx}"
+        request_id = sampling_params["two_stage_group_id"]
 
         metrics = {}
         with simple_timer("generate_sequences", metrics):
@@ -122,50 +127,17 @@ class OpenOneRecAgentLoopWorker(AgentLoopWorker):
             sampling_params["max_tokens"] = batch.meta_info["max_tokens"]
 
         sampling_params["enable_two_stage_rollout"] = True
-        reasoning_max_tokens = batch.meta_info.get(
-            "decode_config",
-            {},
-        ).get(
-            "reasoning",
-            {},
-        ).get(
-            "max_tokens",
-            get_rollout_custom_nested_value(
-                config,
-                ("decode_config", "reasoning", "max_tokens"),
-                get_rollout_custom_value(config, "stage1_max_tokens", config.response_length),
-            ),
+        sampling_params["stage1_max_tokens"] = batch.meta_info.get(
+            "stage1_max_tokens",
+            _read_rollout_custom_value(config, "stage1_max_tokens", config.response_length),
         )
-        beam_width = int(
-            batch.meta_info.get(
-                BEAM_WIDTH_KEY,
-                get_rollout_custom_value(
-                    config,
-                    BEAM_WIDTH_KEY,
-                    get_rollout_custom_value(config, "stage2_beam_size", 32),
-                ),
-            )
+        sampling_params["stage2_beam_size"] = batch.meta_info.get(
+            "stage2_beam_size",
+            _read_rollout_custom_value(config, "stage2_beam_size", 32),
         )
-        item_max_tokens = int(
-            batch.meta_info.get(
-                "beam_search_params",
-                {},
-            ).get(
-                "max_tokens",
-                get_rollout_custom_nested_value(
-                    config,
-                    ("beam_search_params", "max_tokens"),
-                    get_rollout_custom_value(config, "stage2_num_tokens", 16),
-                ),
-            )
-        )
-        sampling_params.update(
-            build_two_stage_sampling_params(
-                reasoning_max_tokens=int(reasoning_max_tokens),
-                item_max_tokens=item_max_tokens,
-                beam_width=beam_width,
-                return_all_beams=batch.meta_info.get("beam_return_mode") == "all_beams",
-            )
+        sampling_params["stage2_num_tokens"] = batch.meta_info.get(
+            "stage2_num_tokens",
+            _read_rollout_custom_value(config, "stage2_num_tokens", 16),
         )
 
         if batch.meta_info.get("validate", False):

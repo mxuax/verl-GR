@@ -19,15 +19,6 @@ pad_dataproto_to_divisor = getattr(protocol_mod, "pad_dataproto_to_divisor")
 unpad_dataproto = getattr(protocol_mod, "unpad_dataproto")
 extract_reward = getattr(reward_mod, "extract_reward")
 
-from verl_gr.workers.rollout.beam_config import (
-    BEAM_RETURN_MODE_KEY,
-    BEAM_SEARCH_PARAMS_KEY,
-    BEAM_WIDTH_KEY,
-    DECODE_CONFIG_KEY,
-    build_two_stage_sampling_params,
-    get_rollout_custom_nested_value,
-)
-
 
 class ValidationGenerationsLogger:
     """Local validation generations logger for OpenOneRec.
@@ -199,34 +190,13 @@ def openonerec_validate(trainer):
         rollout_custom = rollout_config.get("custom") or {}
 
         if is_two_stage_rollout_val:
-            reasoning_max_tokens = rollout_custom.get(
-                "stage1_max_tokens",
-                get_rollout_custom_nested_value(
-                    rollout_config,
-                    (DECODE_CONFIG_KEY, "reasoning", "max_tokens"),
-                    trainer.config.data.get("max_response_length", 1024),
-                ),
-            )
-            beam_width = rollout_custom.get(
-                BEAM_WIDTH_KEY,
-                rollout_custom.get("stage2_beam_size", 32),
-            )
-            item_max_tokens = rollout_custom.get(
-                "stage2_num_tokens",
-                get_rollout_custom_nested_value(
-                    rollout_config,
-                    (BEAM_SEARCH_PARAMS_KEY, "max_tokens"),
-                    3,
-                ),
-            )
             meta_info["enable_two_stage_rollout"] = True
-            meta_info.update(
-                build_two_stage_sampling_params(
-                    reasoning_max_tokens=int(reasoning_max_tokens),
-                    item_max_tokens=int(item_max_tokens),
-                    beam_width=int(beam_width),
-                )
+            meta_info["stage1_max_tokens"] = rollout_custom.get(
+                "stage1_max_tokens",
+                trainer.config.data.get("max_response_length", 1024),
             )
+            meta_info["stage2_beam_size"] = rollout_custom.get("stage2_beam_size", 32)
+            meta_info["stage2_num_tokens"] = rollout_custom.get("stage2_num_tokens", 3)
             meta_info["max_tokens"] = trainer.config.data.get("max_response_length", 1024)
             print(f"[OneRecTrainer] Validation Two-Stage Enabled: {meta_info}")
         elif use_beam_search_val:
@@ -235,7 +205,7 @@ def openonerec_validate(trainer):
             meta_info["max_tokens"] = trainer.config.data.get("max_response_length", 16)
             meta_info["temperature"] = 0
             meta_info["n"] = val_kwargs.get("n", 1)
-            meta_info[BEAM_RETURN_MODE_KEY] = "all_beams"
+            meta_info["return_all_beams"] = True
             print(f"[OneRecTrainer] Validation Beam Search Enabled (optimized, no repeat): {meta_info}")
 
         test_gen_batch.meta_info = meta_info
