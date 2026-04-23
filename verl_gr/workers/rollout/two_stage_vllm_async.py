@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import OrderedDict
 from typing import Any, Optional
@@ -11,6 +12,7 @@ import ray
 from verl_gr.workers.rollout.beam_backend import run_async_beam_search
 from verl_gr.workers.rollout.beam_config import (
     BeamSearchConfig,
+    get_rollout_custom_value,
     resolve_beam_search_config,
     resolve_two_stage_decode_config,
 )
@@ -49,6 +51,12 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._two_stage_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._two_stage_inflight: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        # vLLM V1 can become unstable when too many short-lived async requests hit the
+        # engine core at once. Two-stage beam search multiplies request fan-out, so we
+        # cap in-flight subrequests per server to keep IPC pressure bounded.
+        beam_parallelism = int(get_rollout_custom_value(self.config, "beam_subrequest_parallelism", 8))
+        self._two_stage_request_semaphore = asyncio.Semaphore(max(1, beam_parallelism))
 
     async def generate(
         self,
@@ -95,20 +103,16 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         )
         beam_index = beam_config.index % max(beam_config.width, 1)
         cache_key = str(beam_config.group_id)
-
-        if cache_key not in self._two_stage_cache:
-            self._two_stage_cache[cache_key] = await self._build_two_stage_cache_entry(
-                prompt_ids=prompt_ids,
-                sampling_params=sampling_params,
-                request_id=request_id,
-                image_data=image_data,
-                video_data=video_data,
-                priority=priority,
-                beam_config=beam_config,
-            )
-            self._trim_two_stage_cache()
-
-        cache_entry = self._two_stage_cache[cache_key]
+        cache_entry = await self._get_or_build_two_stage_cache_entry(
+            cache_key=cache_key,
+            prompt_ids=prompt_ids,
+            sampling_params=sampling_params,
+            request_id=request_id,
+            image_data=image_data,
+            video_data=video_data,
+            priority=priority,
+            beam_config=beam_config,
+        )
         self._two_stage_cache.move_to_end(cache_key)
         selected_idx = min(beam_index, len(cache_entry["responses"]) - 1)
         selected = cache_entry["responses"][selected_idx]
@@ -226,6 +230,51 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
             "remaining": max(1, beam_config.width),
         }
 
+    async def _get_or_build_two_stage_cache_entry(
+        self,
+        *,
+        cache_key: str,
+        prompt_ids: list[int],
+        sampling_params: dict[str, Any],
+        request_id: str,
+        image_data: Optional[list[Any]],
+        video_data: Optional[list[Any]],
+        priority: int,
+        beam_config: BeamSearchConfig,
+    ) -> dict[str, Any]:
+        cached = self._two_stage_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        inflight = self._two_stage_inflight.get(cache_key)
+        if inflight is None:
+            inflight = asyncio.create_task(
+                self._build_two_stage_cache_entry(
+                    prompt_ids=prompt_ids,
+                    sampling_params=sampling_params,
+                    request_id=request_id,
+                    image_data=image_data,
+                    video_data=video_data,
+                    priority=priority,
+                    beam_config=beam_config,
+                )
+            )
+            self._two_stage_inflight[cache_key] = inflight
+            inflight.add_done_callback(
+                lambda finished_task, key=cache_key: self._two_stage_inflight.pop(key, None)
+                if self._two_stage_inflight.get(key) is finished_task
+                else None
+            )
+
+        cache_entry = await inflight
+        existing = self._two_stage_cache.get(cache_key)
+        if existing is not None:
+            return existing
+
+        self._two_stage_cache[cache_key] = cache_entry
+        self._trim_two_stage_cache()
+        return cache_entry
+
     async def _run_stage2_beam_search(
         self,
         *,
@@ -278,18 +327,19 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         lora_request: Optional[LoRARequest],
         priority: int,
     ) -> RequestOutput:
-        generator = self.engine.generate(
-            prompt=prompt,
-            sampling_params=sampling_params,
-            request_id=request_id,
-            lora_request=lora_request,
-            priority=priority,
-        )
-        final_res: Optional[RequestOutput] = None
-        async for output in generator:
-            final_res = output
-        assert final_res is not None
-        return final_res
+        async with self._two_stage_request_semaphore:
+            generator = self.engine.generate(
+                prompt=prompt,
+                sampling_params=sampling_params,
+                request_id=request_id,
+                lora_request=lora_request,
+                priority=priority,
+            )
+            final_res: Optional[RequestOutput] = None
+            async for output in generator:
+                final_res = output
+            assert final_res is not None
+            return final_res
 
     async def _build_lora_request(self) -> Optional[LoRARequest]:
         if not self.lora_as_adapter:
