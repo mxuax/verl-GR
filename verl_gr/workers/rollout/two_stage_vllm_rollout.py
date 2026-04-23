@@ -9,6 +9,11 @@ import torch
 
 from verl import DataProto
 from verl_gr.third_party.vllm import BeamSearchParams, LoRARequest
+from verl_gr.workers.rollout.beam_config import (
+    BeamSearchConfig,
+    resolve_beam_search_config,
+    resolve_two_stage_decode_config,
+)
 from verl_gr.workers.rollout.primitives import (
     build_lora_requests,
     build_sampling_params,
@@ -20,18 +25,6 @@ from verl_gr.workers.rollout.primitives import (
 logger = logging.getLogger(__name__)
 
 ServerAdapter = getattr(import_module("verl.workers.rollout.vllm_rollout.vllm_rollout"), "ServerAdapter")
-
-
-def _read_rollout_custom_value(config, key: str, default):
-    custom = getattr(config, "custom", None)
-    if isinstance(custom, dict):
-        return custom.get(key, default)
-    if custom is None:
-        return default
-    try:
-        return custom.get(key, default)
-    except AttributeError:
-        return default
 
 
 class TwoStagevLLMRollout(ServerAdapter):
@@ -71,18 +64,26 @@ class TwoStagevLLMRollout(ServerAdapter):
         vllm_inputs = prepared_inputs.vllm_inputs
         non_tensor_batch = prepared_inputs.non_tensor_batch
 
-        stage1_max_tokens = kwargs.get(
-            "stage1_max_tokens",
-            _read_rollout_custom_value(self.config, "stage1_max_tokens", kwargs.get("max_tokens", 1024)),
+        generation_kwargs = dict(kwargs)
+        decode_config = resolve_two_stage_decode_config(
+            generation_kwargs,
+            config=self.config,
+            response_length=kwargs.get("max_tokens", 1024),
+        )
+        beam_config: BeamSearchConfig = resolve_beam_search_config(
+            generation_kwargs,
+            config=self.config,
+            request_id="sync-two-stage",
+            default_max_tokens=decode_config.item_generation.max_tokens or 16,
         )
         cot_sampling_params = build_sampling_params(
-            max_tokens=stage1_max_tokens,
+            max_tokens=decode_config.reasoning.max_tokens,
             n=1,
             temperature=kwargs.get("temperature", 1.0),
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
-            stop=["</think>"],
-            include_stop_str_in_output=True,
+            stop=decode_config.reasoning.stop,
+            include_stop_str_in_output=decode_config.reasoning.include_stop_str_in_output,
         )
 
         lora_requests = build_lora_requests(
@@ -101,7 +102,7 @@ class TwoStagevLLMRollout(ServerAdapter):
 
         stage2_inputs = []
         tokenizer = self.inference_engine.get_tokenizer()
-        prefix_ids = tokenizer.encode("\n<|sid_begin|>", add_special_tokens=False)
+        prefix_ids = tokenizer.encode(decode_config.item_generation.prefix_text, add_special_tokens=False)
         vocab_size = len(tokenizer)
 
         for i, output in enumerate(cot_outputs):
@@ -115,21 +116,16 @@ class TwoStagevLLMRollout(ServerAdapter):
                 stage2_input["multi_modal_data"] = vllm_inputs[i]["multi_modal_data"]
             stage2_inputs.append(stage2_input)
 
-        beam_width = kwargs.get(
-            "stage2_beam_size",
-            _read_rollout_custom_value(self.config, "stage2_beam_size", 32),
-        )
-        max_tokens_item = kwargs.get(
-            "stage2_max_tokens",
-            kwargs.get(
-                "stage2_num_tokens",
-                _read_rollout_custom_value(self.config, "stage2_num_tokens", 16),
-            ),
-        )
         if BeamSearchParams is None:
             raise ImportError("BeamSearchParams not available; cannot run stage-2 beam search.")
 
-        beam_params = BeamSearchParams(beam_width=beam_width, max_tokens=max_tokens_item)
+        beam_params = BeamSearchParams(
+            beam_width=beam_config.width,
+            max_tokens=beam_config.max_tokens,
+            ignore_eos=beam_config.ignore_eos,
+            temperature=beam_config.temperature,
+            length_penalty=beam_config.length_penalty,
+        )
         item_outputs = self.inference_engine.beam_search(prompts=stage2_inputs, params=beam_params)
 
         expansion = expand_beam_candidates(
@@ -139,9 +135,9 @@ class TwoStagevLLMRollout(ServerAdapter):
             attention_mask=attention_mask,
             position_ids=position_ids,
             non_tensor_batch=non_tensor_batch,
-            beam_width=beam_width,
-            return_all_beams=kwargs.get("return_all_beams", True),
-            beam_idxs=non_tensor_batch.get("beam_idx"),
+            beam_width=beam_config.width,
+            beam_return_mode=beam_config.return_mode,
+            beam_indices=non_tensor_batch.get("beam_index", non_tensor_batch.get("beam_idx")),
         )
 
         return pack_rollout_batch(
@@ -168,6 +164,10 @@ class TwoStagevLLMRollout(ServerAdapter):
             "n",
             "top_p",
             "top_k",
+            "beam_width",
+            "beam_search_params",
+            "beam_return_mode",
+            "decode_config",
             "stage1_max_tokens",
             "stage2_beam_size",
             "stage2_max_tokens",
