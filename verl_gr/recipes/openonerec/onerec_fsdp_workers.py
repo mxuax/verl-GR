@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.workers.engine_workers import ActorRolloutRefWorker
-
-
-def register_two_stage_rollout_classes() -> None:
-    """Register OpenOneRec two-stage rollout in the local worker process."""
-    rollout_base_mod = import_module("verl.workers.rollout.base")
-    rollout_registry = getattr(rollout_base_mod, "_ROLLOUT_REGISTRY")
-    rollout_registry[("two_stage", "async")] = "verl_gr.workers.rollout.two_stage_vllm_rollout.TwoStagevLLMRollout"
+from verl_gr.workers.rollout.two_stage_registration import register_two_stage_rollout_class
 
 
 class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
@@ -38,5 +31,5 @@ class OneRecActorRolloutRefWorker(ActorRolloutRefWorker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         if self.config.rollout.name == "two_stage" and self.config.rollout.mode == "async":
-            register_two_stage_rollout_classes()
+            register_two_stage_rollout_class()
         return super().init_model()

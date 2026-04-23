@@ -13,6 +13,13 @@ from verl_gr.recipes.openonerec.onerec_trainer import (
     openonerec_maybe_log_val_generations,
     openonerec_validate,
 )
+from verl_gr.workers.rollout.beam_config import (
+    BEAM_SEARCH_PARAMS_KEY,
+    BEAM_WIDTH_KEY,
+    DECODE_CONFIG_KEY,
+    build_two_stage_sampling_params,
+    get_rollout_custom_nested_value,
+)
 
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
 
@@ -127,17 +134,38 @@ class RLTrainer(RayPPOTrainerBase):
         rollout_cfg = self.config.actor_rollout_ref.rollout
         if rollout_cfg.get("name") == "two_stage":
             rollout_custom = rollout_cfg.get("custom") or {}
+            reasoning_max_tokens = rollout_custom.get(
+                "stage1_max_tokens",
+                get_rollout_custom_nested_value(
+                    rollout_cfg,
+                    (DECODE_CONFIG_KEY, "reasoning", "max_tokens"),
+                    self.config.data.get("max_response_length", rollout_cfg.response_length),
+                ),
+            )
+            beam_width = rollout_custom.get(
+                BEAM_WIDTH_KEY,
+                rollout_custom.get("stage2_beam_size", 32),
+            )
+            item_max_tokens = rollout_custom.get(
+                "stage2_num_tokens",
+                get_rollout_custom_nested_value(
+                    rollout_cfg,
+                    (BEAM_SEARCH_PARAMS_KEY, "max_tokens"),
+                    3,
+                ),
+            )
             gen_batch.meta_info.update(
                 {
                     "enable_two_stage_rollout": True,
-                    "stage1_max_tokens": rollout_custom.get(
-                        "stage1_max_tokens",
-                        self.config.data.get("max_response_length", rollout_cfg.response_length),
-                    ),
-                    "stage2_beam_size": rollout_custom.get("stage2_beam_size", 32),
-                    "stage2_num_tokens": rollout_custom.get("stage2_num_tokens", 3),
                     "max_tokens": self.config.data.get("max_response_length", rollout_cfg.response_length),
                 }
+            )
+            gen_batch.meta_info.update(
+                build_two_stage_sampling_params(
+                    reasoning_max_tokens=int(reasoning_max_tokens),
+                    item_max_tokens=int(item_max_tokens),
+                    beam_width=int(beam_width),
+                )
             )
         return gen_batch
 

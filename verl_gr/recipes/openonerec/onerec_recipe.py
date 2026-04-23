@@ -21,6 +21,11 @@ from verl.utils.dataset.vision_utils import process_image, process_video
 from verl.utils.fs import copy_to_local
 from verl.utils.model import compute_position_id_with_mask
 from verl.workers.engine_workers import ActorRolloutRefWorker, TrainingWorker
+from verl_gr.workers.rollout.beam_config import BEAM_WIDTH_KEY
+from verl_gr.workers.rollout.two_stage_registration import (
+    register_two_stage_replica,
+    register_two_stage_rollout_class,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -463,7 +468,7 @@ class OneRecTask:
                 rollout_cfg.custom = OmegaConf.create({})
             custom_cfg = rollout_cfg.custom
 
-        beam_size = int(custom_cfg.get("stage2_beam_size", 32))
+        beam_size = int(custom_cfg.get(BEAM_WIDTH_KEY, custom_cfg.get("stage2_beam_size", 32)))
         base_train_n = int(rollout_cfg.get("n", 1))
         rollout_cfg["n"] = base_train_n * beam_size
 
@@ -502,18 +507,8 @@ class OneRecTask:
             actor_rollout_ref_worker = ActorRolloutRefWorker
             if config.actor_rollout_ref.rollout.get("name") == "two_stage":
                 # Agent loop in verl>=0.7 resolves rollout backend via RolloutReplicaRegistry.
-                # Register a real async two-stage replica instead of aliasing to plain vLLM.
-                RolloutReplicaRegistry = getattr(import_module("verl.workers.rollout.replica"), "RolloutReplicaRegistry")
-                TwoStagevLLMReplica = getattr(
-                    import_module("verl_gr.workers.rollout.two_stage_vllm_async"),
-                    "TwoStagevLLMReplica",
-                )
-                RolloutReplicaRegistry.register("two_stage", lambda: TwoStagevLLMReplica)
-                rollout_base_mod = import_module("verl.workers.rollout.base")
-                rollout_registry = getattr(rollout_base_mod, "_ROLLOUT_REGISTRY")
-                rollout_registry[("two_stage", "async")] = (
-                    "verl_gr.workers.rollout.two_stage_vllm_rollout.TwoStagevLLMRollout"
-                )
+                register_two_stage_replica()
+                register_two_stage_rollout_class()
                 OmegaConf.update(
                     config,
                     "actor_rollout_ref.rollout.agent.agent_loop_manager_class",

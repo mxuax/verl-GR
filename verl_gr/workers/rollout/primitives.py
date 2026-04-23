@@ -133,16 +133,17 @@ def expand_beam_candidates(
     position_ids: torch.Tensor,
     non_tensor_batch: dict[str, Any],
     beam_width: int,
-    return_all_beams: bool,
-    beam_idxs: Any = None,
+    beam_return_mode: str = "all_beams",
+    beam_indices: Any = None,
 ) -> CandidateExpansion:
     """Expand beam outputs back into prompt-aligned tensors and metadata."""
 
     responses: list[list[int]] = []
+    return_all_beams = beam_return_mode == "all_beams"
 
     if return_all_beams:
         expanded_idx: list[int] = []
-        beam_indices: list[int] = []
+        expanded_beam_indices: list[int] = []
         for sample_idx, output in enumerate(item_outputs):
             original_prompt_len = len(stage_inputs[sample_idx]["prompt_token_ids"])
             num_seqs = len(output.sequences)
@@ -150,18 +151,18 @@ def expand_beam_candidates(
                 best_seq = output.sequences[seq_idx] if seq_idx < num_seqs else output.sequences[0]
                 responses.append(best_seq.tokens[original_prompt_len:])
                 expanded_idx.append(sample_idx)
-                beam_indices.append(seq_idx)
+                expanded_beam_indices.append(seq_idx)
 
         idx = idx[expanded_idx]
         attention_mask = attention_mask[expanded_idx]
         position_ids = position_ids[expanded_idx]
         non_tensor_batch = _expand_non_tensor_batch(non_tensor_batch, expanded_idx)
-        non_tensor_batch["_beam_indices"] = np.array(beam_indices, dtype=np.int64)
+        non_tensor_batch["_beam_indices"] = np.array(expanded_beam_indices, dtype=np.int64)
         batch_size = len(responses)
     else:
         for sample_idx, output in enumerate(item_outputs):
             original_prompt_len = len(stage_inputs[sample_idx]["prompt_token_ids"])
-            seq_idx = int(beam_idxs[sample_idx]) if beam_idxs is not None else 0
+            seq_idx = int(beam_indices[sample_idx]) if beam_indices is not None else 0
             if seq_idx >= len(output.sequences):
                 seq_idx = 0
             responses.append(output.sequences[seq_idx].tokens[original_prompt_len:])

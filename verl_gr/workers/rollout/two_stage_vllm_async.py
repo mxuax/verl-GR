@@ -8,6 +8,12 @@ from typing import Any, Optional
 
 import ray
 
+from verl_gr.workers.rollout.beam_backend import run_async_beam_search
+from verl_gr.workers.rollout.beam_config import (
+    BeamSearchConfig,
+    resolve_beam_search_config,
+    resolve_two_stage_decode_config,
+)
 from verl.utils.tokenizer import normalize_token_ids
 from verl.workers.rollout.replica import TokenOutput
 from verl.workers.rollout.utils import qwen2_5_vl_dedup_image_tokens
@@ -27,18 +33,6 @@ from verl.workers.rollout.vllm_rollout.vllm_async_server import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _read_rollout_custom_value(config, key: str, default):
-    custom = getattr(config, "custom", None)
-    if isinstance(custom, dict):
-        return custom.get(key, default)
-    if custom is None:
-        return default
-    try:
-        return custom.get(key, default)
-    except AttributeError:
-        return default
 
 
 def _extract_output_log_probs(output, token_ids: list[int]) -> Optional[list[float]]:
@@ -94,15 +88,13 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         video_data: Optional[list[Any]],
         priority: int,
     ) -> TokenOutput:
-        beam_width = int(
-            sampling_params.pop(
-                "stage2_beam_size",
-                _read_rollout_custom_value(self.config, "stage2_beam_size", 32),
-            )
+        beam_config = resolve_beam_search_config(
+            sampling_params,
+            config=self.config,
+            request_id=request_id,
         )
-        beam_idx = int(sampling_params.pop("beam_idx", 0)) % max(beam_width, 1)
-        group_id = sampling_params.pop("two_stage_group_id", request_id)
-        cache_key = str(group_id)
+        beam_index = beam_config.index % max(beam_config.width, 1)
+        cache_key = str(beam_config.group_id)
 
         if cache_key not in self._two_stage_cache:
             self._two_stage_cache[cache_key] = await self._build_two_stage_cache_entry(
@@ -112,19 +104,19 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
                 image_data=image_data,
                 video_data=video_data,
                 priority=priority,
-                beam_width=beam_width,
+                beam_config=beam_config,
             )
             self._trim_two_stage_cache()
 
         cache_entry = self._two_stage_cache[cache_key]
         self._two_stage_cache.move_to_end(cache_key)
-        selected_idx = min(beam_idx, len(cache_entry["responses"]) - 1)
+        selected_idx = min(beam_index, len(cache_entry["responses"]) - 1)
         selected = cache_entry["responses"][selected_idx]
 
         extra_fields = dict(cache_entry["extra_fields"])
         extra_fields["generated_items"] = cache_entry["generated_items"][selected_idx]
-        extra_fields["_beam_idx"] = selected_idx
-        extra_fields["_two_stage_group_id"] = cache_key
+        extra_fields["_beam_index"] = selected_idx
+        extra_fields["_beam_group_id"] = cache_key
 
         remaining = int(cache_entry.get("remaining", 0)) - 1
         if remaining <= 0:
@@ -150,7 +142,7 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         image_data: Optional[list[Any]],
         video_data: Optional[list[Any]],
         priority: int,
-        beam_width: int,
+        beam_config: BeamSearchConfig,
     ) -> dict[str, Any]:
         prompt_ids = normalize_token_ids(prompt_ids)
         prompt_ids = qwen2_5_vl_dedup_image_tokens(prompt_ids, self.model_config.processor)
@@ -166,34 +158,19 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         temperature = sampling_params.pop("temperature", 1.0)
         top_p = sampling_params.pop("top_p", 1.0)
         top_k = sampling_params.pop("top_k", -1)
-
-        stage1_max_tokens = int(
-            sampling_params.pop(
-                "stage1_max_tokens",
-                _read_rollout_custom_value(
-                    self.config,
-                    "stage1_max_tokens",
-                    sampling_params.get("max_tokens", self.config.response_length),
-                ),
-            )
-        )
-        stage2_num_tokens = int(
-            sampling_params.pop(
-                "stage2_num_tokens",
-                sampling_params.pop(
-                    "stage2_max_tokens",
-                    _read_rollout_custom_value(self.config, "stage2_num_tokens", 16),
-                ),
-            )
+        decode_config = resolve_two_stage_decode_config(
+            sampling_params,
+            config=self.config,
+            response_length=sampling_params.get("max_tokens", self.config.response_length),
         )
 
         stage1_params = SamplingParams(
-            max_tokens=max(0, min(stage1_max_tokens, self.config.max_model_len - len(prompt_ids))),
+            max_tokens=max(0, min(decode_config.reasoning.max_tokens, self.config.max_model_len - len(prompt_ids))),
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
-            stop=["</think>"],
-            include_stop_str_in_output=True,
+            stop=decode_config.reasoning.stop,
+            include_stop_str_in_output=decode_config.reasoning.include_stop_str_in_output,
             logprobs=0 if want_logprobs else None,
             repetition_penalty=self.config.get("repetition_penalty", 1.0),
         )
@@ -207,25 +184,18 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
 
         stage1_output = stage1_res.outputs[0]
         stage1_token_ids = list(stage1_output.token_ids)
-        prefix_ids = self.model_config.tokenizer.encode("\n<|sid_begin|>", add_special_tokens=False)
-        stage2_prompt_ids = prompt_ids + stage1_token_ids + prefix_ids
-        stage2_prompt = TokensPrompt(prompt_token_ids=stage2_prompt_ids, multi_modal_data=multi_modal_data)
-
-        stage2_params = SamplingParams(
-            max_tokens=max(0, min(stage2_num_tokens, self.config.max_model_len - len(stage2_prompt_ids))),
-            n=max(1, beam_width),
-            temperature=0.0,
-            top_p=1.0,
-            top_k=-1,
-            logprobs=0 if want_logprobs else None,
-            repetition_penalty=1.0,
+        prefix_ids = self.model_config.tokenizer.encode(
+            decode_config.item_generation.prefix_text,
+            add_special_tokens=False,
         )
-        stage2_res = await self._run_generate_request(
-            prompt=stage2_prompt,
-            sampling_params=stage2_params,
+        stage2_prompt_ids = prompt_ids + stage1_token_ids + prefix_ids
+        stage2_candidates = await self._run_stage2_beam_search(
+            prompt_token_ids=stage2_prompt_ids,
+            multi_modal_data=multi_modal_data,
             request_id=f"{request_id}:stage2",
             lora_request=lora_request,
             priority=priority,
+            beam_config=beam_config,
         )
 
         extra_fields = {"global_steps": self.global_steps}
@@ -237,15 +207,11 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
 
         responses: list[dict[str, Any]] = []
         generated_items: list[list[int]] = []
-        stage2_outputs = stage2_res.outputs or []
-        if not stage2_outputs:
-            stage2_outputs = [stage2_res.outputs[0]]
-        for seq_idx in range(max(1, beam_width)):
-            seq_output = stage2_outputs[seq_idx] if seq_idx < len(stage2_outputs) else stage2_outputs[0]
-            item_token_ids = list(seq_output.token_ids)
+        for candidate in stage2_candidates:
+            item_token_ids = list(candidate.generated_token_ids)
             full_response_ids = stage1_token_ids + prefix_ids + item_token_ids
             stage1_log_probs = _extract_output_log_probs(stage1_output, stage1_token_ids)
-            stage2_log_probs = _extract_output_log_probs(seq_output, item_token_ids)
+            stage2_log_probs = candidate.log_probs if want_logprobs else None
             if stage1_log_probs is not None and stage2_log_probs is not None:
                 combined_log_probs = stage1_log_probs + [0.0] * len(prefix_ids) + stage2_log_probs
             else:
@@ -257,8 +223,51 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
             "responses": responses,
             "generated_items": generated_items,
             "extra_fields": extra_fields,
-            "remaining": max(1, beam_width),
+            "remaining": max(1, beam_config.width),
         }
+
+    async def _run_stage2_beam_search(
+        self,
+        *,
+        prompt_token_ids: list[int],
+        multi_modal_data: dict[str, Any],
+        request_id: str,
+        lora_request: Optional[LoRARequest],
+        priority: int,
+        beam_config: BeamSearchConfig,
+    ):
+        eos_token_id = self.model_config.tokenizer.eos_token_id
+
+        async def generate_one_token(current_prompt_token_ids: list[int], request_suffix: str):
+            prompt = TokensPrompt(
+                prompt_token_ids=current_prompt_token_ids,
+                multi_modal_data=multi_modal_data,
+            )
+            params = SamplingParams(
+                max_tokens=1,
+                logprobs=max(2 * beam_config.width, 1),
+                temperature=beam_config.temperature,
+                top_p=beam_config.top_p,
+                top_k=beam_config.top_k,
+                repetition_penalty=1.0,
+            )
+            return await self._run_generate_request(
+                prompt=prompt,
+                sampling_params=params,
+                request_id=f"{request_id}:{request_suffix}",
+                lora_request=lora_request,
+                priority=priority,
+            )
+
+        return await run_async_beam_search(
+            prompt_token_ids=prompt_token_ids,
+            beam_width=beam_config.width,
+            max_tokens=max(0, min(beam_config.max_tokens, self.config.max_model_len - len(prompt_token_ids))),
+            eos_token_id=eos_token_id,
+            ignore_eos=beam_config.ignore_eos,
+            length_penalty=beam_config.length_penalty,
+            generate_one_token=generate_one_token,
+        )
 
     async def _run_generate_request(
         self,
@@ -310,8 +319,17 @@ class TwoStagevLLMReplica(vLLMReplica):
         gpus_per_node: int = 8,
         is_reward_model: bool = False,
         is_teacher_model: bool = False,
+        name_suffix: str = "",
     ):
-        super().__init__(replica_rank, config, model_config, gpus_per_node, is_reward_model, is_teacher_model)
+        super().__init__(
+            replica_rank,
+            config,
+            model_config,
+            gpus_per_node,
+            is_reward_model,
+            is_teacher_model,
+            name_suffix,
+        )
         self.server_class = ray.remote(TwoStagevLLMHttpServer)
 
     def _get_server_name_prefix(self) -> str:
