@@ -47,7 +47,7 @@ AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-${N_GPUS:-1}}"
 ENABLE_THINK="${ENABLE_THINK:-True}"
 ENABLE_NONTHINK="${ENABLE_NONTHINK:-False}"
 USE_FORCE_PREFIX="${USE_FORCE_PREFIX:-False}"
-DATA_DIR="${DATA_DIR:-${VERL_GR_ROOT}/verl_gr/recipes/openonerec/output/rl_data}"
+DATA_DIR="${VERL_GR_ROOT}/verl_gr/recipes/openonerec/output/rl_data"
 TRAIN_FILES="${TRAIN_FILES:-[${DATA_DIR}/train.parquet]}"
 VAL_FILES="${VAL_FILES:-[${DATA_DIR}/test.parquet]}"
 
