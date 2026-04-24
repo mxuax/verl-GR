@@ -1,9 +1,14 @@
 """RL trainer extensions for verl-GR with bridged ray-trainer API."""
 
+import numpy as np
 import torch
 
 from verl import DataProto
 from verl.trainer.ppo import core_algos
+from verl.trainer.ppo import reward as reward_mod
+from verl.trainer.ppo import ray_trainer as ray_trainer_mod
+from verl.trainer.ppo import metric_utils as metric_utils_mod
+from verl.trainer.ppo.metric_utils import compute_data_metrics as base_compute_data_metrics
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase
 from verl.trainer.ppo.ray_trainer import Role, ResourcePoolManager
 from verl.utils.torch_functional import masked_mean
@@ -22,6 +27,77 @@ from verl_gr.workers.rollout.beam_config import (
 )
 
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
+
+
+def _to_numeric_1d_array(values):
+    arr = np.asarray(values)
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        return None
+    if np.issubdtype(arr.dtype, np.number):
+        return arr
+    if arr.dtype == np.dtype("O"):
+        try:
+            return np.asarray(arr, dtype=np.float64)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _collect_reward_extra_metrics(batch: DataProto) -> dict[str, float]:
+    non_tensor = batch.non_tensor_batch
+    if not non_tensor:
+        return {}
+
+    batch_size = len(batch)
+    data_sources = non_tensor.get("source")
+    if data_sources is None:
+        data_sources = non_tensor.get("data_source")
+    if data_sources is not None:
+        data_sources = np.asarray(data_sources)
+        if data_sources.ndim != 1 or len(data_sources) != batch_size:
+            data_sources = None
+
+    skip_keys = {
+        "source",
+        "data_source",
+        "uid",
+        "reward_model",
+        "extra_info",
+        "request_id",
+        "__num_turns__",
+    }
+    metrics: dict[str, float] = {}
+    for key, values in non_tensor.items():
+        if key in skip_keys:
+            continue
+        numeric_values = _to_numeric_1d_array(values)
+        if numeric_values is None or len(numeric_values) != batch_size:
+            continue
+        metrics[f"reward/all/{key}/mean"] = float(np.mean(numeric_values))
+        metrics[f"reward/all/{key}/max"] = float(np.max(numeric_values))
+        metrics[f"reward/all/{key}/min"] = float(np.min(numeric_values))
+
+        if data_sources is None:
+            continue
+        for source in np.unique(data_sources):
+            source_mask = data_sources == source
+            if not np.any(source_mask):
+                continue
+            source_values = numeric_values[source_mask]
+            source_name = str(source)
+            metrics[f"reward/{source_name}/{key}/mean"] = float(np.mean(source_values))
+            metrics[f"reward/{source_name}/{key}/max"] = float(np.max(source_values))
+            metrics[f"reward/{source_name}/{key}/min"] = float(np.min(source_values))
+            metrics[f"reward/{source_name}/{key}/count"] = int(np.sum(source_mask))
+    return metrics
+
+
+def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str, float]:
+    metrics = base_compute_data_metrics(batch=batch, use_critic=use_critic)
+    metrics.update(_collect_reward_extra_metrics(batch))
+    return metrics
 
 
 def apply_kl_penalty(data: DataProto, kl_ctrl, kl_penalty: str = "kl"):
@@ -100,6 +176,12 @@ def compute_advantage(
     return data
 
 
+ray_trainer_mod.apply_kl_penalty = apply_kl_penalty
+ray_trainer_mod.compute_advantage = compute_advantage
+metric_utils_mod.compute_data_metrics = compute_data_metrics
+ray_trainer_mod.compute_data_metrics = compute_data_metrics
+
+
 class RLTrainer(RayPPOTrainerBase):
     """RayPPOTrainer override with different workload helpers."""
 
@@ -168,6 +250,29 @@ class RLTrainer(RayPPOTrainerBase):
                 )
             )
         return gen_batch
+
+    def compute_validation_reward(self, batch: DataProto) -> dict:
+        """Return validation reward in a unified dict shape.
+
+        Normalized output format:
+            {
+                "reward_tensor": torch.Tensor,
+                "reward_extra_info": dict[str, list | np.ndarray]
+            }
+        """
+        if hasattr(self, "val_reward_fn") and self.val_reward_fn is not None:
+            result = self.val_reward_fn(batch, return_dict=True)
+            return {
+                "reward_tensor": result["reward_tensor"],
+                "reward_extra_info": result.get("reward_extra_info", {}),
+            }
+
+        # Compatibility for verl_080_dev-style trainer stacks.
+        reward_tensor, reward_extra_info = reward_mod.extract_reward(batch)
+        return {
+            "reward_tensor": reward_tensor,
+            "reward_extra_info": reward_extra_info or {},
+        }
 
     def _validate(self):
         return openonerec_validate(self)
