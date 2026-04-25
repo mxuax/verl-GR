@@ -86,7 +86,7 @@ actor_rollout_ref:
     layered_summon: false
     custom:
       beam_width: 32
-      beam_subrequest_parallelism: 8
+      two_stage_max_inflight_requests: 8
       beam_search_params:
         max_tokens: 3
       decode_config:

@@ -183,8 +183,12 @@ class TwoStagevLLMRollout(ServerAdapter):
         await super().resume(tags=tags)
 
     async def update_weights(self, weights, global_steps: int = None, **kwargs):
-        """Delegate weight sync to ServerAdapter async transport."""
-        await super().update_weights(weights=weights, global_steps=global_steps, **kwargs)
+        """Abort two-stage requests before syncing weights through ServerAdapter."""
+        await self._execute_method("abort_all_requests", kwargs={"reset_prefix_cache": True})
+        try:
+            await super().update_weights(weights=weights, global_steps=global_steps, **kwargs)
+        finally:
+            await self._execute_method("resume_generation")
 
     async def release(self):
         """Lifecycle hook required by BaseRollout in verl>=0.7.x."""
