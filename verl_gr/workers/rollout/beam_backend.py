@@ -45,6 +45,41 @@ def beam_search_score(
     return candidate.cumulative_logprob / (seq_len**length_penalty)
 
 
+def _dedupe_candidates(
+    candidates: list[BeamCandidate],
+    *,
+    eos_token_id: int,
+    length_penalty: float,
+) -> list[BeamCandidate]:
+    """Keep the best scoring candidate for each generated token sequence."""
+
+    best_by_tokens: dict[tuple[int, ...], BeamCandidate] = {}
+    for candidate in candidates:
+        key = tuple(candidate.generated_token_ids)
+        current = best_by_tokens.get(key)
+        if current is None or beam_search_score(
+            candidate,
+            eos_token_id=eos_token_id,
+            length_penalty=length_penalty,
+        ) > beam_search_score(
+            current,
+            eos_token_id=eos_token_id,
+            length_penalty=length_penalty,
+        ):
+            best_by_tokens[key] = candidate
+
+    deduped = list(best_by_tokens.values())
+    deduped.sort(
+        key=lambda candidate: beam_search_score(
+            candidate,
+            eos_token_id=eos_token_id,
+            length_penalty=length_penalty,
+        ),
+        reverse=True,
+    )
+    return deduped
+
+
 async def run_async_beam_search(
     *,
     prompt_token_ids: list[int],
@@ -105,13 +140,10 @@ async def run_async_beam_search(
         if not expanded:
             break
 
-        expanded.sort(
-            key=lambda candidate: beam_search_score(
-                candidate,
-                eos_token_id=eos_token_id,
-                length_penalty=length_penalty,
-            ),
-            reverse=True,
+        expanded = _dedupe_candidates(
+            expanded,
+            eos_token_id=eos_token_id,
+            length_penalty=length_penalty,
         )
         active = expanded[:beam_width]
 
@@ -120,12 +152,9 @@ async def run_async_beam_search(
             beam.finish_reason = "length"
         completed.append(beam)
 
-    completed.sort(
-        key=lambda candidate: beam_search_score(
-            candidate,
-            eos_token_id=eos_token_id,
-            length_penalty=length_penalty,
-        ),
-        reverse=True,
+    completed = _dedupe_candidates(
+        completed,
+        eos_token_id=eos_token_id,
+        length_penalty=length_penalty,
     )
     return completed[:beam_width]
