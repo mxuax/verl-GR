@@ -5,19 +5,18 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
+from datetime import datetime, timezone
 from importlib import import_module
 
 DataProto = getattr(import_module("verl"), "DataProto")
 metric_utils_mod = import_module("verl.trainer.ppo.metric_utils")
 protocol_mod = import_module("verl.protocol")
-reward_mod = import_module("verl.trainer.ppo.reward")
 np = import_module("numpy")
 torch = import_module("torch")
 
 process_validation_metrics = getattr(metric_utils_mod, "process_validation_metrics")
 pad_dataproto_to_divisor = getattr(protocol_mod, "pad_dataproto_to_divisor")
 unpad_dataproto = getattr(protocol_mod, "unpad_dataproto")
-extract_reward = getattr(reward_mod, "extract_reward")
 
 from verl_gr.workers.rollout.beam_config import (
     BEAM_RETURN_MODE_KEY,
@@ -39,6 +38,19 @@ class ValidationGenerationsLogger:
     def __init__(self, project_name: str, experiment_name: str):
         self.project_name = project_name
         self.experiment_name = experiment_name
+        self._tb_writer = None
+        self._dump_trace_count = 0
+
+    def _get_tb_writer(self):
+        if self._tb_writer is not None:
+            return self._tb_writer
+        from torch.utils.tensorboard import SummaryWriter
+
+        tb_dir = os.environ.get("TENSORBOARD_DIR", os.path.join("tensorboard_log", self.project_name, self.experiment_name))
+        os.makedirs(tb_dir, exist_ok=True)
+        print(f"[val_generations] Saving tensorboard traces to {tb_dir}")
+        self._tb_writer = SummaryWriter(log_dir=tb_dir)
+        return self._tb_writer
 
     @staticmethod
     def _normalize_backends(logger_backends):
@@ -54,12 +66,37 @@ class ValidationGenerationsLogger:
             return
 
         # Tensorboard does not have a standard table API in this trainer stack.
-        # Keep behavior deterministic and visible via logs.
+        # Emit text traces with unique names so all validation dumps stay visible.
         if "tensorboard" in backends:
             preview = samples[: min(3, len(samples))]
+            writer = self._get_tb_writer()
+            trace_idx = self._dump_trace_count
+            self._dump_trace_count += 1
+            timestamp = datetime.now(tz=timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
+            trace_tag = f"val/generations/step_{global_step}_trace_{trace_idx:05d}_{timestamp}"
+            trace_lines = [
+                f"project={self.project_name}",
+                f"experiment={self.experiment_name}",
+                f"global_step={global_step}",
+                f"trace_index={trace_idx}",
+                f"sample_count={len(samples)}",
+                "",
+            ]
+            for idx, (inp, out, score) in enumerate(samples):
+                trace_lines.extend(
+                    [
+                        f"--- sample {idx} ---",
+                        f"score: {score}",
+                        f"input: {inp}",
+                        f"output: {out}",
+                        "",
+                    ]
+                )
+            writer.add_text(trace_tag, "\n".join(trace_lines), global_step=global_step)
+            writer.flush()
             print(
                 f"[val_generations] step={global_step} project={self.project_name} "
-                f"exp={self.experiment_name} logged={len(samples)} preview={len(preview)}"
+                f"exp={self.experiment_name} logged={len(samples)} preview={len(preview)} tag={trace_tag}"
             )
             for idx, (inp, out, score) in enumerate(preview):
                 inp_text = str(inp)[:160].replace("\n", "\\n")
@@ -78,7 +115,17 @@ def openonerec_dump_generations(
 ):
     """Dump rollout/validation samples as JSONL."""
     os.makedirs(dump_path, exist_ok=True)
+    # Preserve every dump trace for a step instead of overwriting previous data.
+    # Keep the first file name as "<step>.jsonl" for existing tooling compatibility.
     filename = os.path.join(dump_path, f"{trainer.global_steps}.jsonl")
+    if os.path.exists(filename):
+        trace_suffix = 1
+        while True:
+            trace_name = os.path.join(dump_path, f"{trainer.global_steps}__trace_{trace_suffix:05d}.jsonl")
+            if not os.path.exists(trace_name):
+                filename = trace_name
+                break
+            trace_suffix += 1
 
     n = len(inputs)
     base_data = {
@@ -199,35 +246,34 @@ def openonerec_validate(trainer):
         rollout_custom = rollout_config.get("custom") or {}
 
         if is_two_stage_rollout_val:
-            reasoning_max_tokens = rollout_custom.get(
-                "stage1_max_tokens",
-                get_rollout_custom_nested_value(
-                    rollout_config,
-                    (DECODE_CONFIG_KEY, "reasoning", "max_tokens"),
-                    trainer.config.data.get("max_response_length", 1024),
-                ),
-            )
-            beam_width = rollout_custom.get(
-                BEAM_WIDTH_KEY,
-                rollout_custom.get("stage2_beam_size", 32),
-            )
-            item_max_tokens = rollout_custom.get(
-                "stage2_num_tokens",
-                get_rollout_custom_nested_value(
-                    rollout_config,
-                    (BEAM_SEARCH_PARAMS_KEY, "max_tokens"),
-                    3,
-                ),
-            )
-            meta_info["enable_two_stage_rollout"] = True
-            meta_info.update(
-                build_two_stage_sampling_params(
-                    reasoning_max_tokens=int(reasoning_max_tokens),
-                    item_max_tokens=int(item_max_tokens),
-                    beam_width=int(beam_width),
+            # Keep validation two-stage meta aligned with OpenOneRec fork:
+            # stage1 generates thought; stage2 performs short beam search on SID tokens.
+            stage2_beam_size = int(
+                rollout_custom.get(
+                    "stage2_beam_size",
+                    rollout_custom.get(BEAM_WIDTH_KEY, 32),
                 )
             )
+            stage2_max_tokens = int(
+                rollout_custom.get(
+                    "stage2_max_tokens",
+                    rollout_custom.get(
+                        "stage2_num_tokens",
+                        get_rollout_custom_nested_value(
+                            rollout_config,
+                            (BEAM_SEARCH_PARAMS_KEY, "max_tokens"),
+                            3,
+                        ),
+                    ),
+                )
+            )
+            meta_info["enable_two_stage_rollout"] = True
+            meta_info["stage2_beam_size"] = stage2_beam_size
+            meta_info["stage2_max_tokens"] = stage2_max_tokens
             meta_info["max_tokens"] = trainer.config.data.get("max_response_length", 1024)
+            # Explicitly disable single-stage beam mode for stage-1 decoding.
+            meta_info["use_beam_search"] = False
+            meta_info["n"] = val_kwargs.get("n", 1)
             print(f"[OneRecTrainer] Validation Two-Stage Enabled: {meta_info}")
         elif use_beam_search_val:
             meta_info["use_beam_search"] = True
@@ -252,7 +298,12 @@ def openonerec_validate(trainer):
             test_output_gen_batch_padded = trainer.async_rollout_manager.generate_sequences(test_gen_batch_padded)
 
         if is_two_stage_rollout_val:
-            actual_pad_size = pad_size
+            stage2_beam_size = int(meta_info.get("stage2_beam_size", rollout_custom.get("stage2_beam_size", 32)))
+            print(
+                "[Validation Debug] Two-stage unpad: "
+                f"original pad_size={pad_size}, stage2_beam_size={stage2_beam_size}, actual_pad_size={pad_size * stage2_beam_size}"
+            )
+            actual_pad_size = pad_size * stage2_beam_size
         elif use_beam_search_val:
             n_beams = (
                 val_kwargs.get("n", 1)
@@ -316,7 +367,9 @@ def openonerec_validate(trainer):
                     extra_info_arr[i] = {}
                 extra_info_arr[i]["generated_items"] = generated_items_arr[i]
 
-        reward_tensor, reward_extra_info = extract_reward(test_batch)
+        reward_result = trainer.compute_validation_reward(test_batch)
+        reward_tensor = reward_result["reward_tensor"]
+        reward_extra_info = reward_result.get("reward_extra_info", {})
         scores = reward_tensor.sum(-1).cpu().tolist()
         sample_scores.extend(scores)
         reward_extra_infos_dict["reward"].extend(scores)
