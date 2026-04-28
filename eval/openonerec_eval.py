@@ -3,9 +3,9 @@
 
 This script is intentionally a thin orchestration layer:
 
-1. Resolve a verl actor checkpoint, usually
-   ``outputs/<experiment>/ckpt/global_step_*/actor``.
-2. Merge the FSDP actor shards into a HuggingFace model with
+1. Resolve a pretrained HuggingFace model directory or a verl actor checkpoint,
+   usually ``outputs/<experiment>/ckpt/global_step_*/actor``.
+2. Merge FSDP actor shards into a HuggingFace model with
    ``python -m verl.model_merger``.
 3. Run self-contained OpenOneRec two-stage inference on ``test.parquet`` and
    compute the same SID metrics used by the OpenOneRec benchmark.
@@ -57,7 +57,8 @@ def parse_args() -> argparse.Namespace:
         default=VERL_GR_ROOT / "outputs",
         help=(
             "Directory to search when --actor-checkpoint is omitted. Accepts an outputs root, "
-            "an experiment dir, or a ckpt dir containing global_step_*."
+            "an experiment dir, a ckpt dir containing global_step_*, or a HuggingFace "
+            "model/snapshots dir with .safetensors weights."
         ),
     )
     ckpt.add_argument(
@@ -161,6 +162,39 @@ def default_test_parquet() -> Path:
             return candidate
     searched = "\n  ".join(str(p) for p in candidates)
     raise FileNotFoundError(f"Could not find a default test parquet. Searched:\n  {searched}")
+
+
+def is_raw_hf_model_checkpoint(path: Path) -> bool:
+    """Return true for an already-merged/pretrained HuggingFace model directory."""
+    return (
+        path.is_dir()
+        and (path / "config.json").is_file()
+        and any(path.glob("*.safetensors"))
+    )
+
+
+def discover_raw_hf_model_checkpoint(checkpoint_root: Path) -> Path | None:
+    root = checkpoint_root.expanduser().resolve()
+    if not root.exists():
+        raise FileNotFoundError(f"Checkpoint root does not exist: {root}")
+
+    if is_raw_hf_model_checkpoint(root):
+        return root
+
+    snapshot_root = root / "snapshots"
+    if not snapshot_root.is_dir():
+        return None
+
+    candidates = [
+        snapshot_dir
+        for snapshot_dir in snapshot_root.iterdir()
+        if is_raw_hf_model_checkpoint(snapshot_dir)
+    ]
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def discover_actor_checkpoint(checkpoint_root: Path, global_step: int | None) -> Path:
@@ -934,25 +968,33 @@ def main() -> None:
         if not model_path.exists():
             raise FileNotFoundError(f"Model path does not exist: {model_path}")
     else:
-        actor_checkpoint = args.actor_checkpoint or discover_actor_checkpoint(
-            args.checkpoint_root, args.global_step
-        )
-        print(f"Actor checkpoint: {actor_checkpoint}", flush=True)
-        merged_dir = args.merged_model_dir or default_merged_model_dir(actor_checkpoint)
-        if args.skip_merge:
-            model_path = merged_dir.expanduser().resolve()
-            if not model_path.exists():
-                raise FileNotFoundError(
-                    f"--skip-merge requested but merged model does not exist: {model_path}"
-                )
+        raw_model_checkpoint = None
+        if args.actor_checkpoint is None and args.global_step is None:
+            raw_model_checkpoint = discover_raw_hf_model_checkpoint(args.checkpoint_root)
+
+        if raw_model_checkpoint is not None:
+            model_path = raw_model_checkpoint
+            print(f"Raw HuggingFace model checkpoint: {model_path}", flush=True)
         else:
-            model_path = merge_actor_checkpoint(
-                actor_checkpoint,
-                merged_dir,
-                backend=args.merge_backend,
-                force=args.force_merge,
-                dry_run=args.dry_run,
+            actor_checkpoint = args.actor_checkpoint or discover_actor_checkpoint(
+                args.checkpoint_root, args.global_step
             )
+            print(f"Actor checkpoint: {actor_checkpoint}", flush=True)
+            merged_dir = args.merged_model_dir or default_merged_model_dir(actor_checkpoint)
+            if args.skip_merge:
+                model_path = merged_dir.expanduser().resolve()
+                if not model_path.exists():
+                    raise FileNotFoundError(
+                        f"--skip-merge requested but merged model does not exist: {model_path}"
+                    )
+            else:
+                model_path = merge_actor_checkpoint(
+                    actor_checkpoint,
+                    merged_dir,
+                    backend=args.merge_backend,
+                    force=args.force_merge,
+                    dry_run=args.dry_run,
+                )
 
     print(f"Evaluation model: {model_path}", flush=True)
     if args.dry_run:
