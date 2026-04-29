@@ -372,20 +372,21 @@ def load_samples(
         if len(samples) >= limit:
             break
         item = row.to_dict()
-        messages = _decode_json_like(item.get("messages"))
-        if not isinstance(messages, list):
+        raw_messages = _decode_json_like(item.get("messages"))
+        if not isinstance(raw_messages, list):
             continue
-        messages = _convert_messages_format(messages)
+        messages = _convert_messages_format(raw_messages)
+        prompt_messages, message_groundtruth = _prepare_eval_prompt_messages(messages)
         try:
             prompt = tokenizer.apply_chat_template(
-                messages,
+                prompt_messages,
                 tokenize=False,
                 add_generation_prompt=True,
                 enable_thinking=enable_thinking,
             )
         except TypeError:
             prompt = tokenizer.apply_chat_template(
-                messages,
+                prompt_messages,
                 tokenize=False,
                 add_generation_prompt=True,
             )
@@ -393,8 +394,8 @@ def load_samples(
         groundtruth = ""
         if isinstance(metadata, dict) and metadata.get("answer") is not None:
             groundtruth = str(metadata["answer"]).strip()
-        elif messages:
-            groundtruth = str(messages[-1].get("content", "")).strip()
+        else:
+            groundtruth = message_groundtruth
         samples.append(
             Sample(
                 sample_id=str(len(samples)),
@@ -430,6 +431,16 @@ def _convert_messages_format(messages: list[Any]) -> list[dict[str, str]]:
             )
         converted.append({"role": message.get("role", ""), "content": str(content or "")})
     return converted
+
+
+def _prepare_eval_prompt_messages(messages: list[dict[str, str]]) -> tuple[list[dict[str, str]], str]:
+    """Return prompt messages without the final labeled assistant answer."""
+    prompt_messages = list(messages)
+    groundtruth = ""
+    if prompt_messages and prompt_messages[-1].get("role") == "assistant":
+        groundtruth = str(prompt_messages[-1].get("content", "")).strip()
+        prompt_messages = prompt_messages[:-1]
+    return prompt_messages, groundtruth
 
 
 def extract_ids_from_answer(answer: str) -> set[str]:
