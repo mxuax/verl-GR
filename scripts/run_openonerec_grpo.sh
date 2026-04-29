@@ -145,7 +145,7 @@ done
   trainer.test_freq="${TEST_FREQ}" \
   trainer.log_val_generations="${VAL_LOG_GENERATIONS}" \
   trainer.validation_data_dir=${VALIDATION_DATA_DIR_ARG} \
-  trainer.logger='[tensorboard]' \
+  trainer.logger='[tensorboard, wandb]' \
   trainer.remove_previous_ckpt_in_save=True \
   +ray_kwargs.ray_init._temp_dir="${RAY_TMPDIR}" \
   +ray_kwargs.ray_init.object_spilling_directory="${RAY_SPILL_DIR}" \
