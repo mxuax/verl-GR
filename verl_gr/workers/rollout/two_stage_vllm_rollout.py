@@ -201,7 +201,6 @@ class TwoStagevLLMRollout(ServerAdapter):
             return None
 
         if self.server_handle is None:
-            prefix = self._get_server_name_prefix()
-            self.server_handle = ray.get_actor(f"{prefix}server_{self.replica_rank}_{self.node_rank}")
+            self.server_handle = ray.get_actor(f"vllm_server_{self.replica_rank}_{self.node_rank}")
 
         return await getattr(self.server_handle, method).remote(**kwargs)
