@@ -428,6 +428,12 @@ class OneRecTask(RecipeTaskRuntime):
         register_two_stage_rollout_class()
         OmegaConf.update(
             config,
+            "data.return_raw_chat",
+            True,
+            force_add=True,
+        )
+        OmegaConf.update(
+            config,
             "actor_rollout_ref.rollout.agent.agent_loop_manager_class",
             "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager",
             force_add=True,
