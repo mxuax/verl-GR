@@ -130,6 +130,39 @@ def openonerec_maybe_log_val_generations(trainer, inputs, outputs, scores):
     trainer.validation_generations_logger.log(trainer.config.trainer.logger, samples, trainer.global_steps)
 
 
+class OpenOneRecTrainerAdapter(TrainerTaskAdapter):
+    """OpenOneRec trainer adapter preserving the existing validation helpers."""
+
+    def prepare_gen_batch(self, trainer, batch):
+        return trainer._prepare_recommendation_gen_batch(batch)
+
+    def validate(self, trainer):
+        return openonerec_validate(trainer)
+
+    def dump_generations(
+        self,
+        trainer,
+        inputs,
+        outputs,
+        scores,
+        reward_extra_infos_dict,
+        dump_path,
+        ground_truths=None,
+    ):
+        return openonerec_dump_generations(
+            trainer,
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=dump_path,
+            ground_truths=ground_truths,
+        )
+
+    def maybe_log_val_generations(self, trainer, inputs, outputs, scores):
+        return openonerec_maybe_log_val_generations(trainer, inputs=inputs, outputs=outputs, scores=scores)
+
+
 def _extract_eval_sids(text) -> set[str]:
     if not isinstance(text, str):
         return set()

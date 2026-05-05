@@ -216,7 +216,7 @@ class RLTrainer(RayPPOTrainerBase):
         return gen_batch
 
     def _validate(self):
-        metrics = openonerec_validate(self)
+        metrics = self._get_task_adapter().validate(self)
         self._last_validation_metrics = metrics
         return metrics
 
