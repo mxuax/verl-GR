@@ -21,6 +21,7 @@ from verl.trainer.main_ppo import (
 from verl.trainer.ppo.ray_trainer import Role
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.dataset.rl_dataset import collate_fn
+from verl_gr.recipes.minionerec.minionerec_recipe import MiniOneRecTask
 from verl_gr.recipes.openonerec.onerec_recipe import OneRecTask
 from verl_gr.recipes.rankgrpo.rankgrpo_task import RankGRPOTask
 from verl_gr.trainers.rl_trainer import RLTrainer
@@ -36,14 +37,36 @@ class TaskSpec:
 
 TASK_REGISTRY = {
     "openonerec": TaskSpec(name="openonerec", factory=OneRecTask),
+    "minionerec": TaskSpec(name="minionerec", factory=MiniOneRecTask),
     "rankgrpo": TaskSpec(name="rankgrpo", factory=RankGRPOTask),
 }
 
 
 def _infer_legacy_task_name(config) -> str:
+    task_cfg = config.get("task", {})
+    task_class_path = str(task_cfg.get("class_path", "")).lower()
+    if "minionerec" in task_class_path:
+        return "minionerec"
+    if "rankgrpo" in task_class_path:
+        return "rankgrpo"
+    if "openonerec" in task_class_path:
+        return "openonerec"
+
+    rollout_name = str(config.actor_rollout_ref.rollout.get("name", "")).lower()
+    if rollout_name == "constrained_beam":
+        return "minionerec"
+    if rollout_name == "two_stage":
+        return "openonerec"
+
     custom_cls_name = config.data.get("custom_cls", {}).get("name", "")
     custom_cls_path = config.data.get("custom_cls", {}).get("path", "")
     reward_path = config.get("custom_reward_function", {}).get("path", "")
+    if (
+        "minionerec" in str(custom_cls_name).lower()
+        or "minionerec" in str(custom_cls_path).lower()
+        or "minionerec" in str(reward_path).lower()
+    ):
+        return "minionerec"
     if (
         custom_cls_name == "RankGRPODataset"
         or "rankgrpo" in str(custom_cls_path).lower()
