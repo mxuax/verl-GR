@@ -1,12 +1,20 @@
 """RL trainer extensions for verl-GR with bridged ray-trainer API."""
 
+import json
+import math
+import os
+import shutil
+from typing import Any
+
 import torch
 
 from verl import DataProto
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase
 from verl.trainer.ppo.ray_trainer import Role, ResourcePoolManager
+from verl.utils import tensordict_utils as tu
 from verl.utils.torch_functional import masked_mean
+from verl.workers.utils.padding import left_right_2_no_padding
 
 from verl_gr.recipes.task_factory import load_object
 from verl_gr.recipes.openonerec.onerec_trainer import (
@@ -15,6 +23,9 @@ from verl_gr.recipes.openonerec.onerec_trainer import (
     openonerec_maybe_log_val_generations,
     openonerec_validate,
 )
+from verl_gr.recipes.rankgrpo.rankgrpo_algorithm import compute_rank_grpo_advantage, rankgrpo_enabled
+from verl_gr.recipes.rankgrpo.rankgrpo_trainer import RankGRPOTrainerAdapter
+from verl_gr.trainers.task_adapter import TrainerTaskAdapter
 from verl_gr.workers.rollout.beam_config import (
     BEAM_RETURN_MODE_KEY,
     BEAM_SEARCH_PARAMS_KEY,
@@ -25,6 +36,29 @@ from verl_gr.workers.rollout.beam_config import (
 )
 
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
+_RANKGRPO_TOKENIZER = None
+
+
+class _OpenOneRecTrainerAdapter(TrainerTaskAdapter):
+    def prepare_gen_batch(self, trainer, batch: DataProto) -> DataProto:
+        return trainer._prepare_recommendation_gen_batch(batch)
+
+    def validate(self, trainer):
+        return openonerec_validate(trainer)
+
+    def dump_generations(self, trainer, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
+        return openonerec_dump_generations(
+            trainer,
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=dump_path,
+            ground_truths=ground_truths,
+        )
+
+    def maybe_log_val_generations(self, trainer, inputs, outputs, scores):
+        return openonerec_maybe_log_val_generations(trainer, inputs=inputs, outputs=outputs, scores=scores)
 
 
 def apply_kl_penalty(data: DataProto, kl_ctrl, kl_penalty: str = "kl"):
@@ -47,6 +81,14 @@ def compute_response_mask(data: DataProto):
     response_length = responses.size(1)
     attention_mask = data.batch["attention_mask"]
     return attention_mask[:, -response_length:]
+
+
+def _cfg_get(config: Any, key: str, default=None):
+    if config is None:
+        return default
+    if hasattr(config, "get"):
+        return config.get(key, default)
+    return getattr(config, key, default)
 
 
 def compute_advantage(
@@ -78,14 +120,24 @@ def compute_advantage(
                 config.pf_ppo.weight_pow,
             )
     elif adv_estimator == AdvantageEstimator.GRPO:
-        advantages, returns = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=data.batch["response_mask"],
-            index=data.non_tensor_batch["uid"],
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
+        if rankgrpo_enabled(config):
+            if tokenizer is None:
+                tokenizer = _RANKGRPO_TOKENIZER
+            data = compute_rank_grpo_advantage(
+                data,
+                config=config,
+                tokenizer=tokenizer,
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            )
+        else:
+            advantages, returns = core_algos.compute_grpo_outcome_advantage(
+                token_level_rewards=data.batch["token_level_rewards"],
+                response_mask=data.batch["response_mask"],
+                index=data.non_tensor_batch["uid"],
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            )
+            data.batch["advantages"] = advantages
+            data.batch["returns"] = returns
     else:
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
         adv_kwargs = {
@@ -106,26 +158,263 @@ def compute_advantage(
 class RLTrainer(RayPPOTrainerBase):
     """RayPPOTrainer override with different workload helpers."""
 
-    def _get_task_adapter(self):
-        adapter = getattr(self, "_verl_gr_task_adapter", None)
-        if adapter is not None:
-            return adapter
-        task_cfg = self.config.get("task")
-        adapter_class_path = None
-        if task_cfg is not None:
-            adapter_class_path = task_cfg.get("trainer_adapter_class", task_cfg.get("trainer_hooks_class"))
-        if adapter_class_path:
-            adapter_cls = load_object(str(adapter_class_path))
-            adapter = adapter_cls()
+    def __init__(self, *args, **kwargs):
+        tokenizer = kwargs.get("tokenizer")
+        if tokenizer is None and len(args) >= 2:
+            tokenizer = args[1]
+        super().__init__(*args, **kwargs)
+        global _RANKGRPO_TOKENIZER
+        _RANKGRPO_TOKENIZER = tokenizer
+        if rankgrpo_enabled(self.config.algorithm):
+            import verl.trainer.ppo.ray_trainer as ray_trainer_mod
+
+            ray_trainer_mod.compute_advantage = compute_advantage
+
+    def fit(self):
+        logging_steps = self._as_int(_cfg_get(self.config.trainer, "logging_steps", 1), default=1)
+        if logging_steps <= 1:
+            return super().fit()
+
+        from verl.utils.tracking import Tracking
+
+        original_log = Tracking.log
+
+        def log_every_n_steps(tracking_self, data, step, backend=None):
+            if step == 0 or step % logging_steps == 0:
+                return original_log(tracking_self, data=data, step=step, backend=backend)
+            return None
+
+        Tracking.log = log_every_n_steps
+        try:
+            return super().fit()
+        finally:
+            Tracking.log = original_log
+
+    def _get_task_adapter(self) -> TrainerTaskAdapter:
+        if hasattr(self, "_task_adapter"):
+            return self._task_adapter
+
+        task_name = str(_cfg_get(_cfg_get(self.config, "task", None), "name", "")).lower()
+        rollout_name = str(self.config.actor_rollout_ref.rollout.get("name", ""))
+        if task_name == "rankgrpo":
+            self._task_adapter = RankGRPOTrainerAdapter()
+        elif task_name == "minionerec" or rollout_name == "constrained_beam":
+            adapter_cls = load_object("verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter")
+            self._task_adapter = adapter_cls()
+        elif task_name == "openonerec":
+            self._task_adapter = _OpenOneRecTrainerAdapter()
         else:
-            rollout_name = str(self.config.actor_rollout_ref.rollout.get("name", ""))
-            if rollout_name == "constrained_beam":
-                adapter_cls = load_object("verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter")
-            else:
-                adapter_cls = load_object("verl_gr.recipes.openonerec.onerec_trainer.OpenOneRecTrainerAdapter")
-            adapter = adapter_cls()
-        self._verl_gr_task_adapter = adapter
-        return adapter
+            self._task_adapter = TrainerTaskAdapter()
+        return self._task_adapter
+
+    @staticmethod
+    def _as_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _as_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _expected_actor_lr(self) -> float | None:
+        """Best-effort actor LR for logging when the worker omits it."""
+
+        optim_config = _cfg_get(self.config.actor_rollout_ref.actor, "optim", None)
+        if optim_config is None:
+            return None
+
+        base_lr = self._as_float(_cfg_get(optim_config, "lr", None), default=-1.0)
+        if base_lr < 0:
+            return None
+
+        total_steps = self._as_int(
+            _cfg_get(optim_config, "total_training_steps", self.total_training_steps),
+            default=self.total_training_steps,
+        )
+        if total_steps <= 0:
+            total_steps = self.total_training_steps
+
+        warmup_steps = self._as_int(_cfg_get(optim_config, "lr_warmup_steps", -1), default=-1)
+        if warmup_steps <= 0:
+            warmup_ratio = self._as_float(_cfg_get(optim_config, "lr_warmup_steps_ratio", 0.0), default=0.0)
+            warmup_steps = int(warmup_ratio * total_steps)
+
+        step = max(self._as_int(getattr(self, "global_steps", 0), default=0), 0)
+        if warmup_steps > 0 and step < warmup_steps:
+            return base_lr * float(step) / float(max(1, warmup_steps))
+
+        scheduler_type = _cfg_get(optim_config, "lr_scheduler_type", _cfg_get(optim_config, "warmup_style", "constant"))
+        if scheduler_type != "cosine":
+            return base_lr
+
+        decay_steps = max(1, total_steps - warmup_steps)
+        progress = min(1.0, max(0.0, float(step - warmup_steps) / float(decay_steps)))
+        min_lr_ratio = self._as_float(_cfg_get(optim_config, "min_lr_ratio", 0.0), default=0.0)
+        num_cycles = self._as_float(_cfg_get(optim_config, "num_cycles", 0.5), default=0.5)
+        cosine_scale = 0.5 * (1.0 + math.cos(math.pi * 2.0 * num_cycles * progress))
+        return base_lr * (min_lr_ratio + (1.0 - min_lr_ratio) * cosine_scale)
+
+    def _add_actor_lr_metrics(self, metrics: dict[str, Any]) -> None:
+        optim_config = _cfg_get(self.config.actor_rollout_ref.actor, "optim", None)
+        if optim_config is not None and "actor/base_lr" not in metrics:
+            base_lr = self._as_float(_cfg_get(optim_config, "lr", None), default=-1.0)
+            if base_lr >= 0:
+                metrics["actor/base_lr"] = base_lr
+
+        if "actor/lr" in metrics:
+            return
+        if "lr" in metrics:
+            metrics["actor/lr"] = metrics["lr"]
+            return
+
+        expected_lr = self._expected_actor_lr()
+        if expected_lr is not None:
+            metrics["actor/lr"] = expected_lr
+
+    def _update_actor(self, batch: DataProto) -> DataProto:
+        actor_output = super()._update_actor(batch)
+        self._add_actor_lr_metrics(actor_output.meta_info["metrics"])
+        return actor_output
+
+    def _compute_eval_actor_metrics(self, batch: DataProto) -> dict[str, Any]:
+        """Compute actor loss metrics in eval mode without stepping the optimizer."""
+
+        rollout_config = self.config.actor_rollout_ref.rollout
+        batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
+        batch.meta_info["temperature"] = rollout_config.temperature
+
+        batch_td = batch.to_tensordict()
+        batch_td = left_right_2_no_padding(batch_td)
+        calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
+            self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
+        )
+        tu.assign_non_tensor(
+            batch_td,
+            calculate_entropy=calculate_entropy,
+            compute_loss=True,
+            global_batch_size=batch.batch.batch_size[0],
+        )
+        output = self.actor_rollout_wg.compute_log_prob(batch_td)
+        return dict(tu.get(output, "metrics") or {})
+
+    @staticmethod
+    def _mean_metric(values: list[tuple[float, int]]) -> float | None:
+        total_weight = sum(weight for _, weight in values)
+        if total_weight <= 0:
+            return None
+        return sum(value * weight for value, weight in values) / total_weight
+
+    def _checkpoint_topk_state_path(self) -> str:
+        return os.path.join(self.config.trainer.default_local_dir, "topk_checkpoints.json")
+
+    def _load_topk_checkpoint_state(self) -> list[dict[str, Any]]:
+        if hasattr(self, "_topk_checkpoints"):
+            return self._topk_checkpoints
+        state_path = self._checkpoint_topk_state_path()
+        try:
+            with open(state_path) as f:
+                state = json.load(f)
+        except FileNotFoundError:
+            state = []
+        self._topk_checkpoints = state if isinstance(state, list) else []
+        return self._topk_checkpoints
+
+    def _save_topk_checkpoint_state(self, state: list[dict[str, Any]]) -> None:
+        os.makedirs(self.config.trainer.default_local_dir, exist_ok=True)
+        with open(self._checkpoint_topk_state_path(), "w") as f:
+            json.dump(state, f, indent=2, sort_keys=True)
+        if state:
+            latest_kept_step = max(int(entry["step"]) for entry in state)
+            latest_path = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
+            with open(latest_path, "w") as f:
+                f.write(str(latest_kept_step))
+        self._topk_checkpoints = state
+
+    def _select_topk_metric(self, metrics: dict[str, Any]) -> tuple[str | None, float | None]:
+        metric_name = _cfg_get(
+            self.config.trainer,
+            "best_ckpt_metric",
+            _cfg_get(self.config.trainer, "topk_ckpt_metric", None),
+        )
+        if metric_name:
+            value = metrics.get(metric_name)
+            return metric_name, self._as_float(value, default=float("nan"))
+
+        for candidate in (
+            "val-core/rankgrpo/reward/mean@1",
+            "val-core/rankgrpo/score/mean@1",
+            "val-core/rankgrpo/rank_reward_sum/mean@1",
+        ):
+            if candidate in metrics:
+                return candidate, self._as_float(metrics[candidate], default=float("nan"))
+
+        for key in sorted(metrics):
+            if key.startswith("val-core/") and key.endswith("/mean@1"):
+                return key, self._as_float(metrics[key], default=float("nan"))
+        return None, None
+
+    def _update_topk_checkpoints(self, metrics: dict[str, Any]) -> None:
+        prune_enabled = _cfg_get(self.config.trainer, "best_ckpt_prune_enable", True)
+        if isinstance(prune_enabled, str):
+            prune_enabled = prune_enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
+        if not prune_enabled:
+            return
+
+        top_k = self._as_int(
+            _cfg_get(
+                self.config.trainer,
+                "best_ckpts_to_keep",
+                _cfg_get(self.config.trainer, "topk_ckpt_keep", 0),
+            ),
+            default=0,
+        )
+        if top_k <= 0 or self.global_steps <= 0:
+            return
+
+        ckpt_dir = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}")
+        if not os.path.isdir(ckpt_dir):
+            return
+
+        metric_name, metric_value = self._select_topk_metric(metrics)
+        if metric_name is None or metric_value is None or not math.isfinite(metric_value):
+            print("[topk] No finite validation metric found; skipping checkpoint ranking.")
+            return
+
+        mode = str(
+            _cfg_get(
+                self.config.trainer,
+                "best_ckpt_mode",
+                _cfg_get(self.config.trainer, "topk_ckpt_mode", "max"),
+            )
+        ).lower()
+        reverse = mode != "min"
+        state = [entry for entry in self._load_topk_checkpoint_state() if int(entry.get("step", -1)) != self.global_steps]
+        state.append(
+            {
+                "step": int(self.global_steps),
+                "metric": metric_name,
+                "value": float(metric_value),
+                "path": ckpt_dir,
+            }
+        )
+        state.sort(key=lambda entry: float(entry["value"]), reverse=reverse)
+        keep = state[:top_k]
+        drop = state[top_k:]
+
+        keep_paths = {entry["path"] for entry in keep}
+        for entry in drop:
+            path = entry.get("path")
+            if path and path not in keep_paths and os.path.isdir(path):
+                shutil.rmtree(path)
+                print(f"[topk] Removed checkpoint outside top-{top_k}: {path}")
+
+        self._save_topk_checkpoint_state(keep)
+        print(f"[topk] Kept top-{top_k} checkpoints by {metric_name}: {keep}")
 
     @staticmethod
     def _ensure_reward_routing_keys(proto: DataProto) -> None:
@@ -147,7 +436,18 @@ class RLTrainer(RayPPOTrainerBase):
         position_ids, DataProto.union() asserts on key collisions. For OneRec dataset,
         we remove those prompt tensors before generation and keep reward-routing keys.
         """
-        reward_keys = set({"source", "data_source", "reward_model", "uid"}) & batch.non_tensor_batch.keys()
+        reward_keys = set(
+            {
+                "source",
+                "data_source",
+                "reward_model",
+                "uid",
+                "raw_prompt",
+                "multi_modal_data",
+                "tools_kwargs",
+                "interaction_kwargs",
+            }
+        ) & batch.non_tensor_batch.keys()
         batch_keys_to_pop = [
             key for key in ("input_ids", "attention_mask", "position_ids") if key in batch.batch.keys()
         ]
@@ -216,8 +516,8 @@ class RLTrainer(RayPPOTrainerBase):
         return gen_batch
 
     def _validate(self):
-        metrics = openonerec_validate(self)
-        self._last_validation_metrics = metrics
+        metrics = self._get_task_adapter().validate(self)
+        self._update_topk_checkpoints(metrics)
         return metrics
 
     def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
@@ -236,6 +536,9 @@ class RLTrainer(RayPPOTrainerBase):
 
     def _save_checkpoint(self):
         super()._save_checkpoint()
+        task_name = str(_cfg_get(_cfg_get(self.config, "task", None), "name", "")).lower()
+        if task_name != "openonerec":
+            return
         local_global_step_folder = f"{self.config.trainer.default_local_dir}/global_step_{self.global_steps}"
         openonerec_evaluate_and_prune_checkpoint(
             self,

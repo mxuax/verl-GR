@@ -1,6 +1,5 @@
-# OpenOneRec GRPO config for verl release/v0.7.1.
-# Compose from upstream ppo_trainer to inherit all struct keys
-# (notably global_profiler, ray_kwargs, transfer_queue) and dataclass targets.
+# Minimal Rank-GRPO config for verl release/v0.7.1.
+# Composes from upstream PPO trainer config and keeps rollout on vanilla vLLM.
 
 hydra:
   searchpath:
@@ -10,30 +9,37 @@ defaults:
   - ppo_trainer
   - _self_
 
-# ---------- OpenOneRec GRPO defaults ----------
-
 task:
-  name: openonerec
+  name: rankgrpo
 
 data:
-  max_prompt_length: 10240
+  train_batch_size: 6
+  max_prompt_length: 2048
   prompt_key: prompt
   shuffle: false
-  val_batch_size: 100
-  max_response_length: 2048
+  val_batch_size: 32
+  train_max_samples: -1
+  val_max_samples: 1600
+  max_response_length: 1024
   filter_overlong_prompts: true
   filter_overlong_prompts_workers: 16
   truncation: error
   custom_cls:
-    name: OneRecDataset
+    name: RankGRPODataset
   reward_fn_key: source
-  enable_think: false
-  enable_nonthink: false
-  use_force_prefix: false
   data_source_key: source
+  rankgrpo:
+    rec_num: 20
+    use_chat_template: true
+    add_generation_prompt: true
+    use_processor: false
+    rank_separator: "\n"
+    force_pad_to_eos: true
 
 custom_reward_function:
   name: compute_score
+  reward_kwargs:
+    gt_catalog_path: null
 
 actor_rollout_ref:
   hybrid_engine: true
@@ -43,7 +49,7 @@ actor_rollout_ref:
     fsdp_config:
       wrap_policy:
         transformer_layer_cls_to_wrap:
-          - Qwen3DecoderLayer
+          - Qwen2DecoderLayer
       model_dtype: bfloat16
     profiler:
       enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
@@ -52,21 +58,21 @@ actor_rollout_ref:
 
   actor:
     entropy_checkpointing: true
-    clip_ratio_high: 0.28
+    clip_ratio_high: 0.08
     use_dynamic_bsz: true
-    ppo_mini_batch_size: 8
+    ppo_mini_batch_size: 6
     ppo_max_token_len_per_gpu: 40960
     use_kl_loss: true
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     optim:
-      lr: 2e-6
-      lr_warmup_steps: 10
-      weight_decay: 0.1
+      lr: 1e-6
+      lr_warmup_steps: 0
+      weight_decay: 0.0
     fsdp_config:
       wrap_policy:
         transformer_layer_cls_to_wrap:
-          - Qwen3DecoderLayer
+          - Qwen2DecoderLayer
       model_dtype: bfloat16
     profiler:
       enable: false
@@ -75,48 +81,22 @@ actor_rollout_ref:
 
   rollout:
     name: vllm
-    n: 1
+    n: 8
     dtype: bfloat16
-    tensor_model_parallel_size: 1
+    tensor_model_parallel_size: 2
     temperature: 1.0
     top_p: 1.0
     do_sample: true
-    gpu_memory_utilization: 0.8
+    gpu_memory_utilization: 0.25
     max_num_batched_tokens: 40960
-    max_num_seqs: 2048
+    max_num_seqs: 512
     log_prob_max_token_len_per_gpu: 40960
     enable_chunked_prefill: true
     calculate_log_probs: false
     layered_summon: false
-    val_kwargs:
-      do_sample: true
-      temperature: 0.6
-      top_p: 0.95
-      top_k: 50
-      n: 1
-    custom:
-      beam_width: 32
-      two_stage_max_inflight_requests: 8
-      validation_adaptive_concurrency: true
-      validation_min_concurrent_requests: 64
-      validation_max_concurrent_requests: 256
-      validation_target_gpu_utilization: 85.0
-      validation_gpu_util_tolerance: 7.5
-      validation_concurrency_step: 32
-      beam_search_params:
-        max_tokens: 3
-      decode_config:
-        reasoning:
-          max_tokens: 1024
-        item_generation:
-          max_tokens: 3
-    agent:
-      num_workers: 8
-      agent_loop_manager_class: verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager
-      default_agent_loop: openonerec_two_stage_agent
     engine_kwargs:
       vllm:
-        max_logprobs: 320
+        max_logprobs: 20
     profiler:
       enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
       all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
@@ -134,19 +114,32 @@ algorithm:
   adv_estimator: grpo
   norm_adv_by_std_in_grpo: true
   use_kl_in_reward: false
+  rank_grpo:
+    enable: true
+    rec_num: ${data.rankgrpo.rec_num}
+    rank_separator: ${data.rankgrpo.rank_separator}
+    normalize_by_std: true
+    year_tolerance: 2
+    exclude_seen: true
+    gt_catalog_path: null
+    importance_sampling_level: token
 
 trainer:
-  project_name: OneRec_RL
-  experiment_name: grpo_two_stage
-  val_before_train: true
+  project_name: RankGRPO
+  experiment_name: rankgrpo_vllm
+  val_before_train: false
   default_hdfs_dir: null
   logger: [tensorboard]
-  remove_previous_ckpt_in_save: true
-  save_freq: 20
-  test_freq: 20
-  total_epochs: 2
+  remove_previous_ckpt_in_save: false
+  save_freq: 200
+  test_freq: 200
+  logging_steps: 10
+  best_ckpt_prune_enable: true
+  best_ckpts_to_keep: 3
+  best_ckpt_metric: eval/reward_total
+  total_epochs: 1
   nnodes: 1
-  n_gpus_per_node: 8
+  n_gpus_per_node: 2
 
 critic:
   enable: false
@@ -155,15 +148,11 @@ critic:
     all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
     ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
 
-# ---------- Profiling ----------
-# Align with VERL profiler architecture:
-# global_profiler controls tool/steps/save path, and role-level profiler
-# controls which ranks/roles are enabled.
 global_profiler:
   tool: null
   steps: null
   profile_continuous_steps: false
-  save_path: outputs/profile/openonerec
+  save_path: outputs/profile/rankgrpo
   global_tool_config:
     nsys:
       discrete: false
@@ -179,7 +168,7 @@ global_profiler:
         capture-range-end: null
         kill: none
 
-# ray_kwargs.ray_init is consumed by main_ppo.run_ppo in verl>=0.7.1.
 ray_init:
   num_cpus: null
   timeline_json_file: null
+
