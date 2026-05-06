@@ -163,11 +163,13 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
             extra_fields["generated_items"] = list(sample["token_ids"])
             extra_fields["_beam_index"] = beam_index
             extra_fields["_beam_group_id"] = str(beam_config.group_id)
+            # TokenOutput.stop_reason is a string field. Keep raw reason in extra_fields for debugging.
+            extra_fields["_raw_stop_reason"] = sample.get("stop_reason", "completed")
             return TokenOutput(
                 token_ids=sample["token_ids"],
                 log_probs=sample["log_probs"],
                 routed_experts=None,
-                stop_reason=sample.get("stop_reason", "completed"),
+                stop_reason="completed",
                 num_preempted=None,
                 extra_fields=extra_fields,
             )
@@ -282,7 +284,7 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
         allowed_tokens_fn = build_constraint_from_config(beam_config.constraint, tokenizer=self.model_config.tokenizer)
         generated_token_ids: list[int] = []
         generated_log_probs: list[float] = []
-        stop_reason: int | str = "length"
+        stop_reason: str = "length"
         for step in range(max(1, beam_config.max_tokens)):
             allowed_token_ids = None
             if allowed_tokens_fn is not None:
@@ -324,7 +326,7 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
             generated_token_ids.append(sampled_token_id)
             generated_log_probs.append(sampled_logprob)
             if sampled_token_id == eos_token_id and not beam_config.ignore_eos:
-                stop_reason = eos_token_id
+                stop_reason = "eos"
                 break
         return {"token_ids": generated_token_ids, "log_probs": generated_log_probs, "stop_reason": stop_reason}
 
