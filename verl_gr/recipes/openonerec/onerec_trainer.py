@@ -677,3 +677,43 @@ def openonerec_evaluate_and_prune_checkpoint(trainer, local_global_step_folder, 
         + ", ".join(f"global_step_{record['global_step']}={float(record['score']):.6f}" for record in keep_records)
     )
 
+
+class OpenOneRecTrainerAdapter(TrainerTaskAdapter):
+    """OpenOneRec trainer adapter preserving legacy helper behavior."""
+
+    def prepare_gen_batch(self, trainer, batch):
+        return trainer._prepare_recommendation_gen_batch(batch)
+
+    def validate(self, trainer):
+        return openonerec_validate(trainer)
+
+    def maybe_log_val_generations(self, trainer, inputs, outputs, scores):
+        return openonerec_maybe_log_val_generations(trainer, inputs=inputs, outputs=outputs, scores=scores)
+
+    def dump_generations(
+        self,
+        trainer,
+        inputs,
+        outputs,
+        scores,
+        reward_extra_infos_dict,
+        dump_path,
+        ground_truths=None,
+    ):
+        return openonerec_dump_generations(
+            trainer,
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=dump_path,
+            ground_truths=ground_truths,
+        )
+
+    def evaluate_and_prune_checkpoint(self, trainer, local_global_step_folder: str, metrics=None) -> None:
+        openonerec_evaluate_and_prune_checkpoint(
+            trainer,
+            local_global_step_folder,
+            metrics=metrics,
+        )
+

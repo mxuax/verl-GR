@@ -25,6 +25,7 @@ data:
     path: null
   category: Industrial_and_Scientific
   include_alignment_tasks: true
+  include_alignment_tasks_for_val: false
   sid_index_path: null
   item_meta_path: null
   seq_title_sample: 10000
@@ -129,6 +130,7 @@ trainer:
   project_name: MiniOneRec_RL
   experiment_name: minionerec_grpo_constrained_beam
   val_before_train: true
+  best_ckpt_metric: val-aux/*/hr@20/mean
   default_hdfs_dir: null
   logger: [tensorboard]
   remove_previous_ckpt_in_save: true

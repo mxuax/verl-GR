@@ -137,7 +137,12 @@ class MiniOneRecDataset(Dataset):
         self.seed = config.get("seed", None)
         self.category = config.get("category", "Industrial_and_Scientific")
         self.category_text = CATEGORY_DESCRIPTIONS.get(self.category, self.category)
-        self.include_alignment_tasks = config.get("include_alignment_tasks", True)
+        requested_alignment = bool(config.get("include_alignment_tasks", True))
+        include_alignment_tasks_for_val = config.get("include_alignment_tasks_for_val", False)
+        self.is_val_split = self._is_val_split(self.original_data_files, config.get("val_files"))
+        self.include_alignment_tasks = (
+            bool(include_alignment_tasks_for_val) if self.is_val_split else requested_alignment
+        )
         self.sid_index_path = config.get("sid_index_path")
         self.item_meta_path = config.get("item_meta_path")
         self.seq_title_sample = int(config.get("seq_title_sample", 10000))
@@ -149,6 +154,30 @@ class MiniOneRecDataset(Dataset):
 
         self._download()
         self._read_files_and_tokenize()
+
+    @staticmethod
+    def _normalize_paths(paths: Any) -> list[str]:
+        if paths is None:
+            return []
+        if isinstance(paths, (list, ListConfig)):
+            candidates = list(paths)
+        else:
+            candidates = [paths]
+        normalized = []
+        for value in candidates:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            normalized.append(os.path.normcase(os.path.abspath(os.path.expanduser(text))))
+        return normalized
+
+    @classmethod
+    def _is_val_split(cls, data_files: list[str], val_files_cfg: Any) -> bool:
+        data_paths = cls._normalize_paths(data_files)
+        val_paths = cls._normalize_paths(val_files_cfg)
+        return bool(data_paths and val_paths and set(data_paths) == set(val_paths))
 
     def _download(self, use_origin_parquet: bool = False) -> None:
         target_files = self.original_data_files if use_origin_parquet else self.data_files

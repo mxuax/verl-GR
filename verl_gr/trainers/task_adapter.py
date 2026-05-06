@@ -73,3 +73,8 @@ class TrainerTaskAdapter:
         """Optionally rewrite rm_scores before advantage computation."""
 
         return reward_batch, {}
+
+    def evaluate_and_prune_checkpoint(self, trainer, local_global_step_folder: str, metrics=None) -> None:
+        """Optionally run task-specific checkpoint pruning/evaluation."""
+
+        return None

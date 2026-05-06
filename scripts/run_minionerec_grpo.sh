@@ -124,6 +124,7 @@ echo "==================================="
   +data.sid_index_path="${SID_INDEX_FILE}" \
   +data.item_meta_path="${ITEM_META_FILE}" \
   +data.include_alignment_tasks=true \
+  +data.include_alignment_tasks_for_val=false \
   +data.seq_title_sample="${SEQ_TITLE_SAMPLE:-10000}" \
   custom_reward_function.name="compute_score" \
   custom_reward_function.path="${MINIONEREC_REWARD_PATH}" \
@@ -163,6 +164,7 @@ echo "==================================="
   trainer.experiment_name="${EXPERIMENT_NAME}" \
   trainer.default_local_dir="${OUTPUT_DIR}/ckpt" \
   trainer.validation_data_dir="${VAL_DATA_DIR}" \
+  ++trainer.best_ckpt_metric="${BEST_CKPT_METRIC:-val-aux/*/hr@20/mean}" \
   trainer.test_freq="${TEST_FREQ}" \
   trainer.log_val_generations="${VAL_LOG_GENERATIONS}" \
   trainer.logger='[wandb]' \

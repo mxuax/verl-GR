@@ -2,20 +2,20 @@ import ast
 from pathlib import Path
 
 
-def test_two_stage_rollout_enables_raw_prompt_schema():
+def test_onerec_task_prepare_sets_default_agent_loop():
     source = Path("verl_gr/recipes/openonerec/onerec_recipe.py").read_text()
     module = ast.parse(source)
 
-    configure_rollout = None
+    prepare_fn = None
     for node in ast.walk(module):
         if isinstance(node, ast.ClassDef) and node.name == "OneRecTask":
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "configure_rollout":
-                    configure_rollout = item
+                if isinstance(item, ast.FunctionDef) and item.name == "prepare":
+                    prepare_fn = item
                     break
-    assert configure_rollout is not None
+    assert prepare_fn is not None
 
-    for node in ast.walk(configure_rollout):
+    for node in ast.walk(prepare_fn):
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -28,11 +28,27 @@ def test_two_stage_rollout_enables_raw_prompt_schema():
         if (
             len(args) >= 3
             and isinstance(args[1], ast.Constant)
-            and args[1].value == "data.return_raw_chat"
+            and args[1].value == "actor_rollout_ref.rollout.agent.default_agent_loop"
             and isinstance(args[2], ast.Constant)
-            and args[2].value is True
+            and args[2].value == "openonerec_two_stage_agent"
             and any(keyword.arg == "force_add" and keyword.value.value is True for keyword in node.keywords)
         ):
             break
     else:
-        raise AssertionError("two_stage rollout must enable data.return_raw_chat for agent raw_prompt input")
+        raise AssertionError("OneRecTask.prepare must set two-stage default agent loop")
+
+
+def test_openonerec_trainer_adapter_keeps_legacy_validate_and_checkpoint_helpers():
+    source = Path("verl_gr/recipes/openonerec/onerec_trainer.py").read_text()
+    module = ast.parse(source)
+
+    adapter_cls = None
+    for node in module.body:
+        if isinstance(node, ast.ClassDef) and node.name == "OpenOneRecTrainerAdapter":
+            adapter_cls = node
+            break
+    assert adapter_cls is not None, "OpenOneRecTrainerAdapter should exist for adapter routing"
+
+    method_names = {node.name for node in adapter_cls.body if isinstance(node, ast.FunctionDef)}
+    assert "validate" in method_names
+    assert "evaluate_and_prune_checkpoint" in method_names
