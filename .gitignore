@@ -8,6 +8,9 @@
 *.swo
 *~
 
+# Local changes
+.*
+
 # OS
 .DS_Store
 Thumbs.db

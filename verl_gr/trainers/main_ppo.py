@@ -1,8 +1,10 @@
-"""Local PPO entrypoint with customize verl-gr trainer."""
+"""Task-aware PPO entrypoint for verl-gr recipes."""
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
+from typing import Callable
 
 import hydra
 import ray
@@ -19,10 +21,46 @@ from verl.trainer.main_ppo import (
 from verl.trainer.ppo.ray_trainer import Role
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.dataset.rl_dataset import collate_fn
-from verl_gr.recipes.task_factory import build_task
+from verl_gr.recipes.openonerec.onerec_recipe import OneRecTask
+from verl_gr.recipes.rankgrpo.rankgrpo_task import RankGRPOTask
 from verl_gr.trainers.rl_trainer import RLTrainer
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr" / "openonerec"
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    name: str
+    factory: Callable[[], object]
+
+
+TASK_REGISTRY = {
+    "openonerec": TaskSpec(name="openonerec", factory=OneRecTask),
+    "rankgrpo": TaskSpec(name="rankgrpo", factory=RankGRPOTask),
+}
+
+
+def _infer_legacy_task_name(config) -> str:
+    custom_cls_name = config.data.get("custom_cls", {}).get("name", "")
+    custom_cls_path = config.data.get("custom_cls", {}).get("path", "")
+    reward_path = config.get("custom_reward_function", {}).get("path", "")
+    if (
+        custom_cls_name == "RankGRPODataset"
+        or "rankgrpo" in str(custom_cls_path).lower()
+        or "rankgrpo" in str(reward_path).lower()
+        or config.algorithm.get("rank_grpo", {}).get("enable", False)
+    ):
+        return "rankgrpo"
+    return "openonerec"
+
+
+def _select_task(config):
+    task_name = str(config.get("task", {}).get("name", "") or _infer_legacy_task_name(config)).lower()
+    try:
+        return TASK_REGISTRY[task_name].factory()
+    except KeyError as exc:
+        valid = ", ".join(sorted(TASK_REGISTRY))
+        raise ValueError(f"Unknown verl-gr task '{task_name}'. Expected one of: {valid}") from exc
 
 
 def _build_main():
@@ -32,7 +70,7 @@ def _build_main():
             super().__init__()
 
         def run(self, config):
-            task_impl = build_task(config)
+            task_impl = _select_task(config)
             task_impl.sanitize_fsdp2_wrap_policy(config)
             pprint(OmegaConf.to_container(config, resolve=True))
             OmegaConf.resolve(config)
@@ -96,7 +134,7 @@ def _build_main():
             trainer.fit()
 
     def run_ppo(config) -> None:
-        task_impl = build_task(config)
+        task_impl = _select_task(config)
         task_impl.sanitize_fsdp2_wrap_policy(config)
         auto_set_device(config)
         config = migrate_legacy_reward_impl(config)

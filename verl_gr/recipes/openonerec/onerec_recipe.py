@@ -19,7 +19,7 @@ from verl.utils.dataset.vision_utils import process_image, process_video
 from verl.utils.fs import copy_to_local
 from verl.utils.model import compute_position_id_with_mask
 from verl_gr.workers.rollout.beam_config import BEAM_WIDTH_KEY
-from verl_gr.recipes.task_runtime import RecipeTaskRuntime, build_hf_tokenizer_and_processor
+from verl_gr.recipes.task_runtime import RecipeTaskRuntime
 from verl_gr.workers.rollout.registration import (
     register_two_stage_replica,
     register_two_stage_rollout_class,
@@ -416,24 +416,27 @@ class OneRecTask(RecipeTaskRuntime):
         base_train_n = int(rollout_cfg.get("n", 1))
         rollout_cfg["n"] = base_train_n * beam_size
 
-    @staticmethod
-    def get_reward_model_cfg(config):
-        reward_root = config.get("reward")
-        if reward_root is not None and reward_root.get("reward_model") is not None:
-            return reward_root.reward_model
-        legacy_cfg = config.get("reward_model")
-        if legacy_cfg is not None:
-            return legacy_cfg
-        return None
+        val_kwargs = rollout_cfg.get("val_kwargs")
+        if val_kwargs is not None:
+            base_val_n = int(val_kwargs.get("n", 1))
+            val_kwargs["n"] = base_val_n * beam_size
 
-    def prepare(self, config) -> dict[str, Any]:
-        if not self._two_stage_counts_expanded:
-            self._expand_two_stage_rollout_counts(config)
-            self._two_stage_counts_expanded = True
-        reward_model_cfg = self.get_reward_model_cfg(config)
-        local_path = copy_to_local(
-            config.actor_rollout_ref.model.path,
-            use_shm=config.actor_rollout_ref.model.get("use_shm", False),
+    def configure_rollout(self, config) -> None:
+        if config.actor_rollout_ref.rollout.get("name") != "two_stage":
+            return
+        register_two_stage_replica()
+        register_two_stage_rollout_class()
+        OmegaConf.update(
+            config,
+            "data.return_raw_chat",
+            True,
+            force_add=True,
+        )
+        OmegaConf.update(
+            config,
+            "actor_rollout_ref.rollout.agent.agent_loop_manager_class",
+            "verl_gr.recipes.openonerec.two_stage_agent_loop.OpenOneRecAgentLoopManager",
+            force_add=True,
         )
         OmegaConf.update(
             config,
