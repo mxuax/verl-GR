@@ -78,7 +78,16 @@ def _infer_legacy_task_name(config) -> str:
 
 
 def _select_task(config):
-    task_name = str(config.get("task", {}).get("name", "") or _infer_legacy_task_name(config)).lower()
+    task_cfg = config.get("task", {})
+    task_class_path = str(task_cfg.get("class_path", "")).lower()
+    if "minionerec" in task_class_path:
+        task_name = "minionerec"
+    elif "rankgrpo" in task_class_path:
+        task_name = "rankgrpo"
+    elif "openonerec" in task_class_path:
+        task_name = "openonerec"
+    else:
+        task_name = str(task_cfg.get("name", "") or _infer_legacy_task_name(config)).lower()
     try:
         return TASK_REGISTRY[task_name].factory()
     except KeyError as exc:

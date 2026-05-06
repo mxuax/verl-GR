@@ -9,6 +9,7 @@ defaults:
   - _self_
 
 task:
+  name: minionerec
   class_path: verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask
   trainer_adapter_class: verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter
 

@@ -4,7 +4,7 @@
 #   bash scripts/run_minionerec_grpo_align_rl_sh_4gpu.sh
 #
 # 与 rl.sh 对应关系（要点）:
-#   accelerate --num_processes 4     -> N_GPUS=4, AGENT_LOOP_NUM_WORKERS=4
+#   accelerate --num_processes 4     -> N_GPUS=4
 #   --train_batch_size 64          -> TRAIN_BATCH_SIZE=64
 #   --gradient_accumulation_steps 2-> PPO_MICRO_BATCH_PER_GPU=2（与 run_minionerec_grpo 注释一致）
 #   --num_train_epochs 2           -> TOTAL_EPOCHS=2
@@ -40,7 +40,13 @@ ITEM_META_FILE="${ITEM_META_FILE:-${MINIONEREC_ROOT}/data/Amazon/index/${CATEGOR
 # 4 卡（与 rl.sh accelerate --num_processes 4 一致）
 export N_NODES=1
 export N_GPUS=4
-export AGENT_LOOP_NUM_WORKERS=4
+# 提速经验值（可覆盖）:
+# - workers: 4 -> 6/8（常见在 constrained beam 下提升并发）
+# - inflight: 64 -> 96/128（提升 vLLM 子请求并行度）
+export AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-8}"
+export CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS="${CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS:-128}"
+export TASK_NAME="${TASK_NAME:-minionerec}"
+export TASK_CLASS_PATH="${TASK_CLASS_PATH:-verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask}"
 
 # 与 rl.sh 数值对齐
 export TRAIN_BATCH_SIZE=64
