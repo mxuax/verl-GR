@@ -87,6 +87,31 @@ def test_constrained_beam_falls_back_to_eos_when_top_logprobs_miss_allowed_token
     assert beams[0].finish_reason == "stop"
 
 
+def test_constrained_beam_does_not_return_parent_when_all_beams_finish_with_eos():
+    async def generate_next_tokens(_prompt_ids_list, _request_suffixes, _allowed_token_ids_list):
+        eos_info = SimpleNamespace(logprob=-0.5)
+        return [
+            SimpleNamespace(outputs=[SimpleNamespace(finish_reason=None, logprobs=[{9: eos_info}], token_ids=[9])])
+            for _ in _prompt_ids_list
+        ]
+
+    beams = asyncio.run(
+        run_async_beam_search(
+            prompt_token_ids=[1, 2, 3],
+            beam_width=2,
+            max_tokens=4,
+            eos_token_id=9,
+            ignore_eos=False,
+            length_penalty=1.0,
+            generate_next_tokens=generate_next_tokens,
+        )
+    )
+
+    assert len(beams) == 1
+    assert beams[0].generated_token_ids == [9]
+    assert beams[0].finish_reason == "stop"
+
+
 def test_constrained_beam_falls_back_to_allowed_token_when_top_logprobs_miss_non_eos():
     async def generate_one_token(_prompt_ids, _request_id):
         token_info = SimpleNamespace(logprob=-1.0)
