@@ -56,6 +56,7 @@ async def run_async_beam_search(
     generate_one_token: Callable[[list[int], str], Awaitable[Any]] | None = None,
     generate_next_tokens: Callable[[list[list[int]], list[str], list[list[int]] | None], Awaitable[list[Any]]] | None = None,
     allowed_tokens_fn: Callable[[list[int], list[int]], list[int]] | None = None,
+    decode_mode: str = "deterministic_beam",
 ) -> list[BeamCandidate]:
     if generate_next_tokens is None:
         if generate_one_token is None:
@@ -72,7 +73,10 @@ async def run_async_beam_search(
             ]
             return await asyncio.gather(*tasks)
 
-    active = [BeamCandidate(prompt_token_ids=list(prompt_token_ids))]
+    if decode_mode == "stochastic_constrained":
+        active = [BeamCandidate(prompt_token_ids=list(prompt_token_ids)) for _ in range(max(1, beam_width))]
+    else:
+        active = [BeamCandidate(prompt_token_ids=list(prompt_token_ids))]
     completed: list[BeamCandidate] = []
     logprobs_num = max(2 * beam_width, 1)
 
@@ -139,6 +143,26 @@ async def run_async_beam_search(
                 if not ranked_tokens:
                     add_fallback_token(beam, allowed_tokens, expanded)
                     continue
+
+            if decode_mode == "stochastic_constrained":
+                sampled_token_id = int(first_output.token_ids[0]) if first_output.token_ids else None
+                if sampled_token_id is None:
+                    if allowed_tokens is not None:
+                        add_fallback_token(beam, allowed_tokens, expanded)
+                    continue
+                if allowed_tokens is not None and sampled_token_id not in allowed_tokens:
+                    if not add_fallback_token(beam, allowed_tokens, expanded):
+                        continue
+                    continue
+                token_logprob = float(step_logprobs.get(sampled_token_id).logprob) if sampled_token_id in step_logprobs else 0.0
+                next_beam = beam.extend(sampled_token_id, token_logprob)
+                if sampled_token_id == eos_token_id and not ignore_eos:
+                    next_beam.finish_reason = "stop"
+                    next_beam.stop_reason = eos_token_id
+                    completed.append(next_beam)
+                else:
+                    expanded.append(next_beam)
+                continue
 
             for token_id, token_info in ranked_tokens:
                 next_beam = beam.extend(int(token_id), float(token_info.logprob))

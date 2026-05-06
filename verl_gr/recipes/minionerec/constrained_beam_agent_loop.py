@@ -52,9 +52,14 @@ class MiniOneRecConstrainedBeamAgentLoop(SingleTurnAgentLoop):
         sample_index = kwargs.get("trajectory_sample_index", -1)
         step = kwargs.get("trajectory_step", -1)
         validate = int(bool(kwargs.get("trajectory_validate", False)))
+        beam_params = sampling_params.get(BEAM_SEARCH_PARAMS_KEY) or {}
+        decode_mode = str(beam_params.get("decode_mode", "deterministic_beam")).strip().lower()
 
         sampling_params[BEAM_INDEX_KEY] = beam_index
-        sampling_params[BEAM_GROUP_ID_KEY] = f"{step}:{validate}:{sample_index}"
+        if decode_mode == "stochastic_constrained" and not validate:
+            sampling_params[BEAM_GROUP_ID_KEY] = f"{step}:{validate}:{sample_index}:{rollout_n}"
+        else:
+            sampling_params[BEAM_GROUP_ID_KEY] = f"{step}:{validate}:{sample_index}"
         request_id = sampling_params[BEAM_GROUP_ID_KEY]
 
         metrics = {}
@@ -138,6 +143,16 @@ class MiniOneRecConstrainedBeamAgentLoopWorker(AgentLoopWorker):
             sampling_params["top_p"] = config.val_kwargs.top_p
             sampling_params["top_k"] = config.val_kwargs.top_k
             sampling_params["temperature"] = config.val_kwargs.temperature
+        rollout_custom = config.get("custom") or {}
+        decode_mode_train = str(rollout_custom.get("decode_mode_train", "stochastic_constrained")).strip().lower()
+        decode_mode_val = str(rollout_custom.get("decode_mode_val", "deterministic_beam")).strip().lower()
+        decode_mode = decode_mode_val if batch.meta_info.get("validate", False) else decode_mode_train
+        if decode_mode not in {"deterministic_beam", "stochastic_constrained"}:
+            decode_mode = "deterministic_beam"
+        sampling_params[BEAM_SEARCH_PARAMS_KEY]["decode_mode"] = decode_mode
+        sampling_params[BEAM_SEARCH_PARAMS_KEY]["disable_cache_in_train"] = bool(
+            rollout_custom.get("disable_cache_in_train", True)
+        )
 
         if "agent_name" not in batch.non_tensor_batch:
             batch.non_tensor_batch["agent_name"] = np.array(["minionerec_constrained_beam_agent"] * len(batch), dtype=object)

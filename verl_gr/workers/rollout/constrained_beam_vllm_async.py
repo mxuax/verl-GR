@@ -150,17 +150,49 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
     ) -> TokenOutput:
         beam_config = resolve_beam_search_config(sampling_params, config=self.config, request_id=request_id)
         beam_index = beam_config.index % max(beam_config.width, 1)
+        if beam_config.decode_mode == "stochastic_constrained":
+            sample = await self._run_constrained_stochastic_sample(
+                prompt_ids=prompt_ids,
+                request_id=request_id,
+                image_data=image_data,
+                video_data=video_data,
+                priority=priority,
+                beam_config=beam_config,
+            )
+            extra_fields = {"global_steps": self.global_steps}
+            extra_fields["generated_items"] = list(sample["token_ids"])
+            extra_fields["_beam_index"] = beam_index
+            extra_fields["_beam_group_id"] = str(beam_config.group_id)
+            return TokenOutput(
+                token_ids=sample["token_ids"],
+                log_probs=sample["log_probs"],
+                routed_experts=None,
+                stop_reason=sample.get("stop_reason", "completed"),
+                num_preempted=None,
+                extra_fields=extra_fields,
+            )
         cache_key = str(beam_config.group_id)
-        cache_entry = await self._get_or_build_constrained_beam_cache_entry(
-            cache_key=cache_key,
-            prompt_ids=prompt_ids,
-            request_id=request_id,
-            image_data=image_data,
-            video_data=video_data,
-            priority=priority,
-            beam_config=beam_config,
-        )
-        self._constrained_beam_cache.move_to_end(cache_key)
+        disable_cache_for_this_request = beam_config.disable_cache_in_train and not self._is_validation_group_id(cache_key)
+        if disable_cache_for_this_request:
+            cache_entry = await self._build_constrained_beam_cache_entry(
+                prompt_ids=prompt_ids,
+                request_id=request_id,
+                image_data=image_data,
+                video_data=video_data,
+                priority=priority,
+                beam_config=beam_config,
+            )
+        else:
+            cache_entry = await self._get_or_build_constrained_beam_cache_entry(
+                cache_key=cache_key,
+                prompt_ids=prompt_ids,
+                request_id=request_id,
+                image_data=image_data,
+                video_data=video_data,
+                priority=priority,
+                beam_config=beam_config,
+            )
+            self._constrained_beam_cache.move_to_end(cache_key)
         selected_idx = min(beam_index, len(cache_entry["responses"]) - 1)
         selected = cache_entry["responses"][selected_idx]
         extra_fields = dict(cache_entry["extra_fields"])
@@ -168,11 +200,12 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
         extra_fields["_beam_index"] = selected_idx
         extra_fields["_beam_group_id"] = cache_key
 
-        remaining = int(cache_entry.get("remaining", 0)) - 1
-        if remaining <= 0:
-            self._constrained_beam_cache.pop(cache_key, None)
-        else:
-            cache_entry["remaining"] = remaining
+        if not disable_cache_for_this_request:
+            remaining = int(cache_entry.get("remaining", 0)) - 1
+            if remaining <= 0:
+                self._constrained_beam_cache.pop(cache_key, None)
+            else:
+                cache_entry["remaining"] = remaining
 
         return TokenOutput(
             token_ids=selected["token_ids"],
@@ -182,6 +215,11 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
             num_preempted=None,
             extra_fields=extra_fields,
         )
+
+    @staticmethod
+    def _is_validation_group_id(group_id: str) -> bool:
+        parts = str(group_id).split(":")
+        return len(parts) >= 2 and parts[1] == "1"
 
     async def _build_constrained_beam_cache_entry(
         self,
@@ -221,6 +259,74 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
             "extra_fields": {"global_steps": self.global_steps},
             "remaining": max(1, beam_config.width),
         }
+
+    async def _run_constrained_stochastic_sample(
+        self,
+        *,
+        prompt_ids: list[int],
+        request_id: str,
+        image_data: Optional[list[Any]],
+        video_data: Optional[list[Any]],
+        priority: int,
+        beam_config: BeamSearchConfig,
+    ) -> dict[str, Any]:
+        prompt_token_ids = normalize_token_ids(prompt_ids)
+        prompt_token_ids = qwen2_5_vl_dedup_image_tokens(prompt_token_ids, self.model_config.processor)
+        multi_modal_data = {}
+        if image_data is not None:
+            multi_modal_data["image"] = image_data
+        if video_data is not None:
+            multi_modal_data["video"] = video_data
+        lora_request = await self._build_lora_request()
+        eos_token_id = self.model_config.tokenizer.eos_token_id
+        allowed_tokens_fn = build_constraint_from_config(beam_config.constraint, tokenizer=self.model_config.tokenizer)
+        generated_token_ids: list[int] = []
+        generated_log_probs: list[float] = []
+        stop_reason: int | str = "length"
+        for step in range(max(1, beam_config.max_tokens)):
+            allowed_token_ids = None
+            if allowed_tokens_fn is not None:
+                allowed_token_ids = list(allowed_tokens_fn(prompt_token_ids, generated_token_ids))
+                if not allowed_token_ids and eos_token_id is not None:
+                    allowed_token_ids = [int(eos_token_id)]
+            prompt = TokensPrompt(prompt_token_ids=prompt_token_ids + generated_token_ids, multi_modal_data=multi_modal_data)
+            params = SamplingParams(
+                max_tokens=1,
+                logprobs=1,
+                temperature=beam_config.temperature,
+                top_p=beam_config.top_p,
+                top_k=beam_config.top_k,
+                repetition_penalty=1.0,
+                allowed_token_ids=allowed_token_ids,
+            )
+            output = await self._run_generate_request(
+                prompt=prompt,
+                sampling_params=params,
+                request_id=f"{request_id}:sample_step_{step}",
+                lora_request=lora_request,
+                priority=priority,
+            )
+            sampled_token_id = None
+            sampled_logprob = 0.0
+            if output.outputs and output.outputs[0].token_ids:
+                sampled_token_id = int(output.outputs[0].token_ids[0])
+                if output.outputs[0].logprobs:
+                    sampled_logprob = float(output.outputs[0].logprobs[0].get(sampled_token_id).logprob) if sampled_token_id in output.outputs[0].logprobs[0] else 0.0
+            if sampled_token_id is None or (allowed_token_ids is not None and sampled_token_id not in set(allowed_token_ids)):
+                if allowed_token_ids:
+                    sampled_token_id = int(eos_token_id) if eos_token_id in allowed_token_ids else int(min(allowed_token_ids))
+                    sampled_logprob = 0.0
+                elif eos_token_id is not None:
+                    sampled_token_id = int(eos_token_id)
+                    sampled_logprob = 0.0
+                else:
+                    break
+            generated_token_ids.append(sampled_token_id)
+            generated_log_probs.append(sampled_logprob)
+            if sampled_token_id == eos_token_id and not beam_config.ignore_eos:
+                stop_reason = eos_token_id
+                break
+        return {"token_ids": generated_token_ids, "log_probs": generated_log_probs, "stop_reason": stop_reason}
 
     async def _get_or_build_constrained_beam_cache_entry(self, *, cache_key: str, **kwargs) -> dict[str, Any]:
         cached = self._constrained_beam_cache.get(cache_key)
@@ -316,6 +422,7 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
             length_penalty=beam_config.length_penalty,
             generate_next_tokens=generate_next_tokens,
             allowed_tokens_fn=allowed_tokens_fn,
+            decode_mode=beam_config.decode_mode,
         )
 
     async def _run_generate_request(

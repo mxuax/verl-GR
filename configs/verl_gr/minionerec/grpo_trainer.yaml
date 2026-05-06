@@ -90,6 +90,9 @@ actor_rollout_ref:
       # Effective rollout requests per prompt = num_generations_per_prompt * beam_width.
       num_generations_per_prompt: 1
       beam_width: 20
+      decode_mode_train: stochastic_constrained
+      decode_mode_val: deterministic_beam
+      disable_cache_in_train: true
       constrained_beam_max_inflight_requests: 64
       beam_search_params:
         max_tokens: 16

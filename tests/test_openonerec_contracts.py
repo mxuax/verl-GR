@@ -2,20 +2,20 @@ import ast
 from pathlib import Path
 
 
-def test_onerec_task_prepare_sets_default_agent_loop():
+def test_onerec_task_configure_rollout_sets_default_agent_loop():
     source = Path("verl_gr/recipes/openonerec/onerec_recipe.py").read_text()
     module = ast.parse(source)
 
-    prepare_fn = None
+    configure_rollout_fn = None
     for node in ast.walk(module):
         if isinstance(node, ast.ClassDef) and node.name == "OneRecTask":
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "prepare":
-                    prepare_fn = item
+                if isinstance(item, ast.FunctionDef) and item.name == "configure_rollout":
+                    configure_rollout_fn = item
                     break
-    assert prepare_fn is not None
+    assert configure_rollout_fn is not None
 
-    for node in ast.walk(prepare_fn):
+    for node in ast.walk(configure_rollout_fn):
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -35,7 +35,7 @@ def test_onerec_task_prepare_sets_default_agent_loop():
         ):
             break
     else:
-        raise AssertionError("OneRecTask.prepare must set two-stage default agent loop")
+        raise AssertionError("OneRecTask.configure_rollout must set two-stage default agent loop")
 
 
 def test_openonerec_trainer_adapter_keeps_legacy_validate_and_checkpoint_helpers():

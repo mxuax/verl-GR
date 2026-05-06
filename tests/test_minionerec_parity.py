@@ -161,3 +161,37 @@ def test_unconstrained_batched_beam_does_not_pass_allowed_token_ids():
 
     assert captured_allowed == [None]
     assert beams[0].generated_token_ids == [7]
+
+
+def test_stochastic_constrained_mode_uses_sampled_token_not_top_logprob():
+    async def generate_next_tokens(_prompt_ids_list, _request_suffixes, _allowed_token_ids_list):
+        top_token = SimpleNamespace(logprob=-0.01)
+        sampled_token = SimpleNamespace(logprob=-3.0)
+        return [
+            SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        logprobs=[{7: top_token, 8: sampled_token}],
+                        token_ids=[8],
+                    )
+                ]
+            )
+            for _ in _prompt_ids_list
+        ]
+
+    beams = asyncio.run(
+        run_async_beam_search(
+            prompt_token_ids=[1, 2],
+            beam_width=2,
+            max_tokens=1,
+            eos_token_id=9,
+            ignore_eos=False,
+            length_penalty=1.0,
+            generate_next_tokens=generate_next_tokens,
+            decode_mode="stochastic_constrained",
+        )
+    )
+
+    assert len(beams) == 2
+    assert all(beam.generated_token_ids == [8] for beam in beams)

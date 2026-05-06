@@ -1,15 +1,11 @@
 """RL trainer extensions for verl-GR with bridged ray-trainer API."""
 
-<<<<<<< HEAD
 import numpy as np
-=======
 import json
 import math
 import os
 import shutil
 from typing import Any
-
->>>>>>> 88ab11b578a622184e22c4e4f1ebfab37e0b8c4d
 import torch
 
 from verl import DataProto
@@ -21,8 +17,6 @@ from verl.utils.torch_functional import masked_mean
 from verl.workers.utils.padding import left_right_2_no_padding
 
 from verl_gr.recipes.task_factory import load_object
-<<<<<<< HEAD
-=======
 from verl_gr.recipes.openonerec.onerec_trainer import (
     openonerec_evaluate_and_prune_checkpoint,
     openonerec_dump_generations,
@@ -32,7 +26,6 @@ from verl_gr.recipes.openonerec.onerec_trainer import (
 from verl_gr.recipes.rankgrpo.rankgrpo_algorithm import compute_rank_grpo_advantage, rankgrpo_enabled
 from verl_gr.recipes.rankgrpo.rankgrpo_trainer import RankGRPOTrainerAdapter
 from verl_gr.trainers.task_adapter import TrainerTaskAdapter
->>>>>>> 88ab11b578a622184e22c4e4f1ebfab37e0b8c4d
 from verl_gr.workers.rollout.beam_config import (
     BEAM_RETURN_MODE_KEY,
     BEAM_SEARCH_PARAMS_KEY,
@@ -524,11 +517,8 @@ class RLTrainer(RayPPOTrainerBase):
 
     def _validate(self):
         metrics = self._get_task_adapter().validate(self)
-<<<<<<< HEAD
         self._last_validation_metrics = metrics
-=======
         self._update_topk_checkpoints(metrics)
->>>>>>> 88ab11b578a622184e22c4e4f1ebfab37e0b8c4d
         return metrics
 
     def _compute_reward_colocate(self, batch: DataProto):

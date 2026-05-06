@@ -69,6 +69,9 @@ ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-512}"
 ROLLOUT_MODE="${ROLLOUT_MODE:-async}"
 TEST_FREQ="${TEST_FREQ:-20}"
 VAL_LOG_GENERATIONS="${VAL_LOG_GENERATIONS:-8}"
+DECODE_MODE_TRAIN="${DECODE_MODE_TRAIN:-stochastic_constrained}"
+DECODE_MODE_VAL="${DECODE_MODE_VAL:-deterministic_beam}"
+DISABLE_CACHE_IN_TRAIN="${DISABLE_CACHE_IN_TRAIN:-true}"
 
 FSDP_TRANSFORMER_LAYERS="${FSDP_TRANSFORMER_LAYERS:-Qwen2DecoderLayer}"
 
@@ -104,6 +107,7 @@ echo "Info: ${INFO_FILE}"
 echo "SID index: ${SID_INDEX_FILE}"
 echo "Item meta: ${ITEM_META_FILE}"
 echo "Beam width: ${BEAM_WIDTH} (rl.sh num_generations)"
+echo "Decode mode (train/val): ${DECODE_MODE_TRAIN}/${DECODE_MODE_VAL}"
 echo "Train batch size: ${TRAIN_BATCH_SIZE} | epochs: ${TOTAL_EPOCHS} | lr: ${LEARNING_RATE}"
 echo "PPO micro_batch/GPU: ${PPO_MICRO_BATCH_PER_GPU} (≈rl gradient_accum_steps 2)"
 echo "FSDP wrap layer: ${FSDP_TRANSFORMER_LAYERS}"
@@ -151,6 +155,9 @@ echo "==================================="
   actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap="[${FSDP_TRANSFORMER_LAYERS}]" \
   trainer.total_epochs="${TOTAL_EPOCHS}" \
   actor_rollout_ref.rollout.custom.beam_width="${BEAM_WIDTH}" \
+  ++actor_rollout_ref.rollout.custom.decode_mode_train="${DECODE_MODE_TRAIN}" \
+  ++actor_rollout_ref.rollout.custom.decode_mode_val="${DECODE_MODE_VAL}" \
+  ++actor_rollout_ref.rollout.custom.disable_cache_in_train="${DISABLE_CACHE_IN_TRAIN}" \
   ++actor_rollout_ref.rollout.custom.constrained_beam_max_inflight_requests="${CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS}" \
   actor_rollout_ref.rollout.custom.beam_search_params.max_tokens="${ITEM_MAX_TOKENS}" \
   ++actor_rollout_ref.rollout.custom.beam_search_params.logprobs_multiplier="${LOGPROBS_MULTIPLIER}" \

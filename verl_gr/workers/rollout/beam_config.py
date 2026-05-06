@@ -44,6 +44,8 @@ class BeamSearchConfig:
     top_k: int = -1
     constraint: dict[str, Any] | None = None
     logprobs_multiplier: int = 2
+    decode_mode: str = "deterministic_beam"
+    disable_cache_in_train: bool = False
 
 
 @dataclass(slots=True)
@@ -146,6 +148,22 @@ def resolve_beam_search_config(
         )
     )
     logprobs_multiplier = int(_pop_first(beam_search_params, ("logprobs_multiplier",), 2))
+    decode_mode = str(
+        _pop_first(
+            beam_search_params,
+            ("decode_mode",),
+            _pop_first(source, ("decode_mode",), "deterministic_beam"),
+        )
+    ).strip().lower()
+    if decode_mode not in {"deterministic_beam", "stochastic_constrained"}:
+        decode_mode = "deterministic_beam"
+    disable_cache_in_train = bool(
+        _pop_first(
+            beam_search_params,
+            ("disable_cache_in_train",),
+            _pop_first(source, ("disable_cache_in_train",), False),
+        )
+    )
 
     return BeamSearchConfig(
         width=max(1, beam_width),
@@ -160,6 +178,8 @@ def resolve_beam_search_config(
         top_k=top_k,
         constraint=constraint or None,
         logprobs_multiplier=max(1, logprobs_multiplier),
+        decode_mode=decode_mode,
+        disable_cache_in_train=disable_cache_in_train,
     )
 
 
