@@ -279,7 +279,21 @@ class RLTrainer(RayPPOTrainerBase):
     def _update_actor(self, batch: DataProto) -> DataProto:
         actor_output = super()._update_actor(batch)
         self._add_actor_lr_metrics(actor_output.meta_info["metrics"])
+        if not batch.meta_info.get("validate", False):
+            self._try_sync_ref_model()
         return actor_output
+
+    def _try_sync_ref_model(self):
+        if not self.use_reference_policy or self.ref_in_actor:
+            return
+        freq = _cfg_get(_cfg_get(self.config.actor_rollout_ref, "ref"), "sync_freq")
+        if freq is None:
+            rollout = str(self.config.actor_rollout_ref.rollout.get("name", ""))
+            freq = 1 if rollout == "constrained_beam" else 0
+        freq = int(freq)
+        if freq <= 0 or self.global_steps % freq != 0:
+            return
+        self.ref_policy_wg.sync_ref_weights()
 
     def _compute_eval_actor_metrics(self, batch: DataProto) -> dict[str, Any]:
         """Compute actor loss metrics in eval mode without stepping the optimizer."""

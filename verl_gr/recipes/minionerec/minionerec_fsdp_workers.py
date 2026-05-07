@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.workers.engine_workers import ActorRolloutRefWorker
+from verl_gr.workers.ref_sync import RefSyncMixin
 from verl_gr.workers.rollout.registration import register_constrained_beam_rollout_class
 
 
-class MiniOneRecActorRolloutRefWorker(ActorRolloutRefWorker):
+class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
     """Model-engine worker with local constrained-beam rollout registration."""
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
