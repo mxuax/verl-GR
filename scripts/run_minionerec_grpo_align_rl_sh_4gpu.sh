@@ -47,6 +47,7 @@ export AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-8}"
 export CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS="${CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS:-128}"
 export TASK_NAME="${TASK_NAME:-minionerec}"
 export TASK_CLASS_PATH="${TASK_CLASS_PATH:-verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask}"
+export REWARD_NUM_WORKERS="${REWARD_NUM_WORKERS:-1}"
 
 # 与 rl.sh 数值对齐
 export TRAIN_BATCH_SIZE=64

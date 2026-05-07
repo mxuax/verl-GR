@@ -71,6 +71,7 @@ TEST_FREQ="${TEST_FREQ:-20}"
 VAL_LOG_GENERATIONS="${VAL_LOG_GENERATIONS:-8}"
 TASK_NAME="${TASK_NAME:-minionerec}"
 TASK_CLASS_PATH="${TASK_CLASS_PATH:-verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask}"
+REWARD_NUM_WORKERS="${REWARD_NUM_WORKERS:-1}"
 DECODE_MODE_TRAIN="${DECODE_MODE_TRAIN:-stochastic_constrained}"
 DECODE_MODE_VAL="${DECODE_MODE_VAL:-deterministic_beam}"
 DISABLE_CACHE_IN_TRAIN="${DISABLE_CACHE_IN_TRAIN:-true}"
@@ -112,6 +113,7 @@ echo "Beam width: ${BEAM_WIDTH} (rl.sh num_generations)"
 echo "Decode mode (train/val): ${DECODE_MODE_TRAIN}/${DECODE_MODE_VAL}"
 echo "Train batch size: ${TRAIN_BATCH_SIZE} | epochs: ${TOTAL_EPOCHS} | lr: ${LEARNING_RATE}"
 echo "Task: ${TASK_NAME} (${TASK_CLASS_PATH})"
+echo "Reward workers: ${REWARD_NUM_WORKERS}"
 echo "PPO micro_batch/GPU: ${PPO_MICRO_BATCH_PER_GPU} (≈rl gradient_accum_steps 2)"
 echo "FSDP wrap layer: ${FSDP_TRANSFORMER_LAYERS}"
 echo "Item max tokens: ${ITEM_MAX_TOKENS}"
@@ -124,6 +126,7 @@ echo "==================================="
   ++task.name="${TASK_NAME}" \
   ++task.class_path="${TASK_CLASS_PATH}" \
   ++task.trainer_adapter_class="verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter" \
+  reward.num_workers="${REWARD_NUM_WORKERS}" \
   data.train_files="[${TRAIN_FILE}]" \
   data.val_files="[${VAL_FILE}]" \
   data.custom_cls.name="MiniOneRecDataset" \

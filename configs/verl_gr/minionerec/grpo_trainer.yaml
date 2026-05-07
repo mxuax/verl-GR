@@ -37,6 +37,12 @@ custom_reward_function:
   name: compute_score
   path: null
 
+reward:
+  # MiniOneRec uses a lightweight rule-based reward function.
+  # Spawning the global default (8) reward loop workers makes each one load
+  # tokenizer state and can trigger host-memory pressure during startup.
+  num_workers: 1
+
 actor_rollout_ref:
   hybrid_engine: true
 
