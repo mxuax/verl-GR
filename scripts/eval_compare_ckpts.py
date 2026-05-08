@@ -66,10 +66,14 @@ def constrained_beam_generate(
     prefix_index = 3  # Qwen2
 
     class ConstrainedLogitsProcessor(LogitsProcessor):
-        """Exact mirror of MiniOneRec ``LogitProcessor.py:24-72``."""
+        """Exact mirror of MiniOneRec ``LogitProcessor.py:24-72`` with evaluate.py hash_dict."""
 
         def __init__(self):
             self.count = 0
+
+        @staticmethod
+        def _get_hash(x):
+            return '-'.join(str(_) for _ in x)
 
         def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
             scores = torch.nn.functional.log_softmax(scores, dim=-1)
@@ -84,11 +88,11 @@ def constrained_beam_generate(
                     else:
                         hash_key = sent[-self.count:].tolist()
 
-                    allowed = hash_dict.get(tuple(hash_key), set())
+                    allowed = hash_dict.get(self._get_hash(hash_key), [])
                     if not allowed:
                         mask[batch_id * num_beams + beam_id, eos] = 0
                     else:
-                        mask[batch_id * num_beams + beam_id, list(allowed)] = 0
+                        mask[batch_id * num_beams + beam_id, allowed] = 0
 
             self.count += 1
             return scores + mask
@@ -120,25 +124,42 @@ def constrained_beam_generate(
     return completions
 
 
-def _build_hash_dict(info_file: str, tokenizer) -> dict[tuple[int, ...], set[int]]:
-    """Build prefix-trie constraint exactly as MiniOneRec evaluate.py."""
-    hash_dict: dict[tuple[int, ...], set[int]] = defaultdict(set)
-    eos = tokenizer.eos_token_id
+def _build_hash_dict(info_file: str, tokenizer) -> dict[str, list[int]]:
+    """Build constraint hash dict — exact mirror of MiniOneRec ``evaluate.py:61-113``."""
+    prefix_index = 4 if "gpt2" in str(type(tokenizer)).lower() else 3
 
-    with open(info_file, encoding="utf-8") as fh:
-        for line in fh:
-            sid = line.strip()
-            if not sid:
-                continue
-            tok_ids = tokenizer.encode(sid, add_special_tokens=False)
-            if not tok_ids:
-                continue
-            # All prefixes point to next valid token
-            for i in range(1, len(tok_ids)):
-                prefix = tuple(tok_ids[:i])
-                hash_dict[prefix].add(tok_ids[i])
-            # Complete SID → EOS
-            hash_dict[tuple(tok_ids)].add(eos)
+    with open(info_file, encoding="utf-8") as f:
+        info = f.readlines()
+
+    # Parse: line.split('\t')[0].strip() + "\n"  (evaluate.py:64)
+    semantic_ids = [line.split('\t')[0].strip() + "\n" for line in info]
+
+    # Prefix with "### Response:\n" (evaluate.py:68)
+    info_semantic = [f"### Response:\n{_}" for _ in semantic_ids]
+
+    # Tokenize (evaluate.py:78-80)
+    prefixID = [tokenizer(_).input_ids for _ in info_semantic]
+
+    # Build hash_dict (evaluate.py:86-98)
+    def _hash(x):
+        return '-'.join(str(_) for _ in x)
+
+    hash_dict: dict[str, list[int]] = {}
+    for ID in prefixID:
+        ID.append(tokenizer.eos_token_id)
+        for i in range(prefix_index, len(ID)):
+            if i == prefix_index:
+                hash_number = _hash(ID[:i])
+            else:
+                hash_number = _hash(ID[prefix_index:i])
+            if hash_number not in hash_dict:
+                hash_dict[hash_number] = []
+            hash_dict[hash_number].append(ID[i])
+        _ = _hash(ID[prefix_index:])
+
+    # Deduplicate values (evaluate.py:116)
+    for k in hash_dict:
+        hash_dict[k] = sorted(set(hash_dict[k]))
 
     return hash_dict
 
