@@ -275,6 +275,20 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
     model, tokenizer = load_model_automatic(ckpt_path, device)
     model.eval()
 
+    # Debug: verify hash_dict and tokenizer
+    hd = _build_hash_dict(info_file, tokenizer)
+    print(f"[debug] hash_dict entries: {len(hd)}")
+    # Pick first hash_dict key and verify lookup
+    sample_key = next(iter(hd))
+    print(f"[debug] sample hash_key: {sample_key} → allowed: {hd[sample_key]}")
+    # Verify tokenizer encodes a sample SID
+    with open(info_file) as fh:
+        sample_sid = fh.readline().strip()
+    sample_tokens = tokenizer.encode(sample_sid, add_special_tokens=False)
+    print(f"[debug] sample SID '{sample_sid}' → tokens: {sample_tokens}")
+    # Check vocab size
+    print(f"[debug] tokenizer vocab_size: {len(tokenizer)}, pad_token: {tokenizer.pad_token}, eos_token: {tokenizer.eos_token_id}")
+
     # Load test data
     import pandas as pd
     df = pd.read_csv(test_file)
@@ -304,6 +318,16 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
         except Exception as e:
             print(f"  [{idx}] Generation error: {e}")
             continue
+
+        # Debug: print first 3 samples
+        if idx < 3:
+            print(f"\n  --- Sample {idx} ---")
+            print(f"  Prompt (tail 200): ...{repr(prompt[-200:])}")
+            print(f"  Target: [{target}]")
+            for ci, c in enumerate(completions[:5]):
+                norm = normalize_completion(c)
+                match = "Y" if norm == target.strip().strip('\n\" ') else "N"
+                print(f"  Beam {ci}: [{c[:80]}] norm=[{norm}] {match}")
 
         metrics = compute_metrics(completions, target)
         for k, v in metrics.items():
