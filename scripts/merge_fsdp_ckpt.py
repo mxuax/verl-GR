@@ -162,10 +162,12 @@ def main():
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
+    if not dist.is_available():
+        raise RuntimeError("torch.distributed is not available.")
     if not dist.is_initialized():
-        raise RuntimeError("This script must be launched with torchrun.")
-
+        dist.init_process_group(backend="gloo")
     merge(args.ckpt, args.base_model, args.output)
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
