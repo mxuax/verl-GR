@@ -25,10 +25,15 @@ fi
 BASE_MODEL="${BASE_MODEL:-/path/to/your/model}"
 BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
-FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
+KL_LOSS_TYPE="${KL_LOSS_TYPE:-low_var_kl}"
+NORM_ADV_BY_STD_IN_GRPO="${NORM_ADV_BY_STD_IN_GRPO:-True}"
+FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp2}"
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-True}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
-ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-512}"
+MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-10240}"
+MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-2048}"
+TOTAL_EPOCHS="${TOTAL_EPOCHS:-20}"
+ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-2048}"
 ROLLOUT_ENFORCE_EAGER="${ROLLOUT_ENFORCE_EAGER:-True}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-$((N_GPUS * N_NODES))}"
 
@@ -174,6 +179,11 @@ done
   ++actor_rollout_ref.rollout.mode="${ROLLOUT_MODE}" \
   ++actor_rollout_ref.rollout.name="two_stage" \
   actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
+  actor_rollout_ref.actor.kl_loss_type="${KL_LOSS_TYPE}" \
+  algorithm.norm_adv_by_std_in_grpo="${NORM_ADV_BY_STD_IN_GRPO}" \
+  data.max_prompt_length="${MAX_PROMPT_LENGTH}" \
+  data.max_response_length="${MAX_RESPONSE_LENGTH}" \
+  trainer.total_epochs="${TOTAL_EPOCHS}" \
   trainer.n_gpus_per_node="${N_GPUS}" \
   trainer.nnodes="${N_NODES}" \
   trainer.project_name="${PROJECT_NAME}" \
@@ -181,7 +191,7 @@ done
   trainer.default_local_dir="${OUTPUT_DIR}/ckpt" \
   trainer.test_freq="${TEST_FREQ}" \
   trainer.save_freq="${SAVE_FREQ}" \
-  trainer.val_before_train=False \
+  trainer.val_before_train=True \
   trainer.log_val_generations="${VAL_LOG_GENERATIONS}" \
   trainer.validation_data_dir=${VALIDATION_DATA_DIR_ARG} \
   ++trainer.best_ckpt_prune_enable="${BEST_CKPT_PRUNE_ENABLE}" \

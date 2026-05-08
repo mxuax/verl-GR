@@ -55,11 +55,12 @@ BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 
 # rl.sh: num_generations=16 → beam 宽度对齐；temperature=1.0；train_batch_size=64；epochs=2；lr=1e-5
 BEAM_WIDTH="${BEAM_WIDTH:-16}"
-ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-16}"
+ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-128}"
 LOGPROBS_MULTIPLIER="${LOGPROBS_MULTIPLIER:-2}"
 CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS="${CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS:-64}"
 ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-1.0}"
 LEARNING_RATE="${LEARNING_RATE:-1e-5}"
+KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 TOTAL_EPOCHS="${TOTAL_EPOCHS:-2}"
 PPO_MICRO_BATCH_PER_GPU="${PPO_MICRO_BATCH_PER_GPU:-2}"
 AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-${N_GPUS:-1}}"
@@ -155,6 +156,8 @@ echo "==================================="
   actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.actor.ppo_mini_batch_size="${TRAIN_BATCH_SIZE}" \
   actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
+  actor_rollout_ref.actor.use_kl_loss=True \
+  actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
   actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
   actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
