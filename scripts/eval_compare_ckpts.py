@@ -26,11 +26,8 @@ Or compare two checkpoints:
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
-import re
-import sys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -43,67 +40,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # Prefix Trie Constraint (mirrors MiniOneRec LogitProcessor)
 # =============================================================================
 
-PREFIX_INDEX = 3                              # GPT-2 = 4, Qwen2 = 3
-EOS_TOKEN_ID = None                          # set after tokenizer loaded
-
-
-def build_hash_dict(info_file: str, sid_index_path: str | None = None) -> dict[tuple[int, ...], set[int]]:
-    """Build prefix-trie constraint from info file.
-
-    Mirror of MiniOneRec ``ConstrainedLogitsProcessor`` hash_dict construction.
-    Each line in info_file is a valid SID string like ``<a_X><b_Y><c_Z>``.
-    """
-    tokenizer = None                                         # set below
-
-    hash_dict: dict[tuple[int, ...], set[int]] = {}
-    with open(info_file, encoding="utf-8") as fh:
-        lines = [ln.strip() for ln in fh if ln.strip()]
-
-    # Defer tokenizer loading to here
-    # (caller should pass tokenizer or we use a default path — we handle this in build_constraint)
-
-    return hash_dict, lines
-
-
-def build_constraint(info_file: str, tokenizer, sid_index_path: str | None = None):
-    """Return allowed_tokens_fn usable as LogitsProcessor."""
-    global EOS_TOKEN_ID
-    EOS_TOKEN_ID = tokenizer.eos_token_id
-
-    token_to_id = tokenizer.get_vocab()
-    # Also try subword encoding — add individual tokens
-    with open(info_file, encoding="utf-8") as fh:
-        candidates = [ln.strip() for ln in fh if ln.strip()]
-
-    hash_dict: dict[tuple[int, ...], set[int]] = defaultdict(set)
-
-    for cand in candidates:
-        # Encode the SID string into token IDs
-        tok_ids = tokenizer.encode(cand, add_special_tokens=False)
-        if not tok_ids:
-            continue
-        for end in range(1, len(tok_ids) + 1):
-            prefix = tuple(tok_ids[:end])
-            if end < len(tok_ids):
-                hash_dict[prefix].add(tok_ids[end])
-            else:
-                # EOS follows the last token
-                hash_dict[prefix].add(EOS_TOKEN_ID)
-
-    def allowed_tokens(batch_id: int, input_ids: torch.LongTensor) -> list[int]:
-        sent = input_ids.tolist()
-        count = (sent[-PREFIX_INDEX:] if PREFIX_INDEX > 0 else sent)
-        key = tuple(count[-(PREFIX_INDEX):]) if PREFIX_INDEX > 0 and len(count) >= PREFIX_INDEX else tuple(count)
-        allowed = hash_dict.get(key, None)
-        if allowed is None or len(allowed) == 0:
-            return [EOS_TOKEN_ID]
-        return list(allowed)
-
-    return allowed_tokens
-
-
 # =============================================================================
-# Beam Search (HF generate wrapper)
+# Beam Search (HF generate wrapper — mirrors MiniOneRec evaluate.py)
 # =============================================================================
 
 @torch.no_grad()
@@ -117,24 +55,43 @@ def constrained_beam_generate(
     temperature: float = 1.0,
     device: str = "cuda",
 ) -> list[str]:
-    """Generate `num_beams` constrained completions for a single prompt."""
+    """Generate `num_beams` constrained completions for a single prompt.
+
+    Mirror of MiniOneRec ``evaluate.py`` + ``ConstrainedLogitsProcessor``.
+    """
     from transformers import LogitsProcessor, LogitsProcessorList
 
-    hash_dict, _ = _build_hash_dict_inner(info_file, tokenizer)
+    hash_dict = _build_hash_dict(info_file, tokenizer)
+    eos = tokenizer.eos_token_id
+    prefix_index = 3  # Qwen2
 
     class ConstrainedLogitsProcessor(LogitsProcessor):
+        """Exact mirror of MiniOneRec ``LogitProcessor.py:24-72``."""
+
+        def __init__(self):
+            self.count = 0
+
         def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-            for batch_idx in range(input_ids.shape[0]):
-                sent = input_ids[batch_idx].tolist()
-                count = sent[-PREFIX_INDEX:] if PREFIX_INDEX > 0 else sent
-                key = tuple(count[-min(PREFIX_INDEX, len(count)):])
-                allowed = hash_dict.get(key, None)
-                if allowed is not None and len(allowed) > 0:
-                    mask = torch.ones_like(scores[batch_idx]) * float("-inf")
-                    for tok_id in allowed:
-                        mask[tok_id] = 0.0
-                    scores[batch_idx] += mask
-            return scores
+            scores = torch.nn.functional.log_softmax(scores, dim=-1)
+            mask = torch.full_like(scores, float("-inf"))
+
+            for batch_id, beam_sent in enumerate(
+                input_ids.view(-1, num_beams, input_ids.shape[-1])
+            ):
+                for beam_id, sent in enumerate(beam_sent):
+                    if self.count == 0:
+                        hash_key = sent[-prefix_index:].tolist()
+                    else:
+                        hash_key = sent[-self.count:].tolist()
+
+                    allowed = hash_dict.get(tuple(hash_key), set())
+                    if not allowed:
+                        mask[batch_id * num_beams + beam_id, eos] = 0
+                    else:
+                        mask[batch_id * num_beams + beam_id, list(allowed)] = 0
+
+            self.count += 1
+            return scores + mask
 
     processor = ConstrainedLogitsProcessor()
     inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=True).to(device)
@@ -147,8 +104,8 @@ def constrained_beam_generate(
         do_sample=(temperature > 0),
         temperature=temperature if temperature > 0 else 1.0,
         logits_processor=LogitsProcessorList([processor]),
-        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id or eos,
+        eos_token_id=eos,
         early_stopping=False,
         output_scores=False,
         return_dict_in_generate=True,
@@ -164,20 +121,27 @@ def constrained_beam_generate(
     return completions
 
 
-def _build_hash_dict_inner(info_file: str, tokenizer) -> tuple[dict, list]:
+def _build_hash_dict(info_file: str, tokenizer) -> dict[tuple[int, ...], set[int]]:
+    """Build prefix-trie constraint exactly as MiniOneRec evaluate.py."""
     hash_dict: dict[tuple[int, ...], set[int]] = defaultdict(set)
-    with open(info_file, encoding="utf-8") as fh:
-        candidates = [ln.strip() for ln in fh if ln.strip()]
     eos = tokenizer.eos_token_id
-    for cand in candidates:
-        tok_ids = tokenizer.encode(cand, add_special_tokens=False)
-        if not tok_ids:
-            continue
-        for end in range(1, len(tok_ids) + 1):
-            prefix = tuple(tok_ids[:end])
-            nxt = tok_ids[end] if end < len(tok_ids) else eos
-            hash_dict[prefix].add(nxt)
-    return hash_dict, candidates
+
+    with open(info_file, encoding="utf-8") as fh:
+        for line in fh:
+            sid = line.strip()
+            if not sid:
+                continue
+            tok_ids = tokenizer.encode(sid, add_special_tokens=False)
+            if not tok_ids:
+                continue
+            # All prefixes point to next valid token
+            for i in range(1, len(tok_ids)):
+                prefix = tuple(tok_ids[:i])
+                hash_dict[prefix].add(tok_ids[i])
+            # Complete SID → EOS
+            hash_dict[tuple(tok_ids)].add(eos)
+
+    return hash_dict
 
 
 # =============================================================================
