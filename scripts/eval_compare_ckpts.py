@@ -288,6 +288,22 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
     # Check vocab size
     print(f"[debug] tokenizer vocab_size: {len(tokenizer)}, pad_token: {tokenizer.pad_token}, eos_token: {tokenizer.eos_token_id}")
 
+    # Quick sanity check: generate WITHOUT constraint on first prompt
+    import pandas as pd
+    df = pd.read_csv(test_file)
+    test_prompt = _build_prompt(_parse_history(df.iloc[0].to_dict().get("history_item_sid", "[]")))
+    inputs = tokenizer(test_prompt, return_tensors="pt", add_special_tokens=True).to(device)
+    # Unconstrained greedy
+    out = model.generate(**inputs, max_new_tokens=16, do_sample=False, num_beams=1,
+                         pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id)
+    gen = tokenizer.decode(out[0, inputs["input_ids"].shape[1]:], skip_special_tokens=False)
+    print(f"[debug] unconstrained greedy gen: [{gen}]")
+    # Unconstrained sampling
+    out_s = model.generate(**inputs, max_new_tokens=16, do_sample=True, temperature=1.0,
+                           pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id)
+    gen_s = tokenizer.decode(out_s[0, inputs["input_ids"].shape[1]:], skip_special_tokens=False)
+    print(f"[debug] unconstrained sample gen: [{gen_s}]")
+
     # Load test data
     import pandas as pd
     df = pd.read_csv(test_file)
