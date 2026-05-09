@@ -183,20 +183,24 @@ def compute_metrics(completions: list[str], target: str, ks: list[int] = (1, 3, 
     target = target.strip().strip("\n\" ")
     results = {}
 
+    norm_target = target.strip().strip('\n" ')
+
+    # HR@k: 1.0 if any completion in first k matches, else 0.0
     for k in ks:
-        hits = sum(1 for c in completions[:k] if normalize_completion(c) == target)
-        results[f"HR@{k}"] = hits / k
+        found = any(normalize_completion(c) == norm_target for c in completions[:k])
+        results[f"HR@{k}"] = 1.0 if found else 0.0
 
-    # NDCG
+    # NDCG@50: normalized discounted cumulative gain over ALL completions
     dcg = 0.0
-    idcg = 1.0 / math.log2(2)          # ideal: hit at rank 1
     for i, c in enumerate(completions):
-        if normalize_completion(c) == target:
+        if normalize_completion(c) == norm_target:
             dcg += 1.0 / math.log2(i + 2)
-    results["NDCG"] = dcg / idcg if idcg > 0 else 0.0
+    # IDCG: ideal ranking (hit at position 0)
+    idcg = 1.0 / math.log2(2)
+    results["NDCG@50"] = dcg / idcg if idcg > 0 else 0.0
 
-    # Pass@1
-    results["Pass@1"] = 1.0 if any(normalize_completion(c) == target for c in completions[:1]) else 0.0
+    # Pass@50: 1.0 if any completion in ANY position matches
+    results["Pass@50"] = 1.0 if any(normalize_completion(c) == norm_target for c in completions) else 0.0
 
     return results
 
@@ -378,7 +382,7 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
     elapsed = time.time() - start
     print(f"\n--- Results for {Path(ckpt_path).name} ---")
     print(f"Samples: {len(all_metrics['HR@1'])} | Time: {elapsed:.1f}s")
-    for k in ("HR@1", "HR@3", "HR@5", "HR@10", "HR@20", "NDCG", "Pass@1"):
+    for k in ("HR@1", "HR@3", "HR@5", "HR@10", "HR@20", "NDCG@50", "Pass@50"):
         if k in all_metrics:
             values = all_metrics[k]
             print(f"  {k:12s}: {sum(values)/len(values):.4f}")
@@ -430,7 +434,7 @@ def main():
         print(f"{'='*60}")
         print(f"{'Metric':12s} | {'CKPT1':>10s} | {'CKPT2':>10s} | {'Delta':>10s}")
         print("-" * 48)
-        for k in ("HR@1", "HR@3", "HR@5", "HR@10", "HR@20", "NDCG"):
+        for k in ("HR@1", "HR@3", "HR@5", "HR@10", "HR@20", "NDCG@50", "Pass@50"):
             v1 = sum(results1[k]) / len(results1[k]) if k in results1 else 0
             v2 = sum(results2[k]) / len(results2[k]) if k in results2 else 0
             delta = v1 - v2
