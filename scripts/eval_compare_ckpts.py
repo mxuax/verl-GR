@@ -51,7 +51,7 @@ def constrained_beam_generate(
     prompt: str,
     info_file: str,
     num_beams: int = 50,
-    max_new_tokens: int = 16,
+    max_new_tokens: int = 256,
     temperature: float = 1.0,
     device: str = "cuda",
 ) -> list[str]:
@@ -178,29 +178,35 @@ def normalize_completion(text: str) -> str:
     return text.strip("\n\" ")
 
 
-def compute_metrics(completions: list[str], target: str, ks: list[int] = (1, 3, 5, 10, 20)) -> dict:
-    """Compute hit-rate and NDCG for one prompt's completions against target."""
-    target = target.strip().strip("\n\" ")
+def compute_metrics(completions: list[str], target: str, ks: list[int] = (3, 5, 10)) -> dict:
+    """Compute HR@k and NDCG@k per MiniOneRec calc.py convention.
+
+    HR@k  = 1.0 if target found in first k positions, else 0.0
+    NDCG@k = (1/log2(pos+2)) / (1/log2(2)) if target found in first k, else 0.0
+
+    Both are averaged across all queries by the caller.
+    """
+    norm_target = target.strip().strip('\n" ')
     results = {}
 
-    norm_target = target.strip().strip('\n" ')
-
-    # HR@k: 1.0 if any completion in first k matches, else 0.0
-    for k in ks:
-        found = any(normalize_completion(c) == norm_target for c in completions[:k])
-        results[f"HR@{k}"] = 1.0 if found else 0.0
-
-    # NDCG@50: normalized discounted cumulative gain over ALL completions
-    dcg = 0.0
+    # Find first match position
+    match_pos = -1
     for i, c in enumerate(completions):
         if normalize_completion(c) == norm_target:
-            dcg += 1.0 / math.log2(i + 2)
-    # IDCG: ideal ranking (hit at position 0)
-    idcg = 1.0 / math.log2(2)
-    results["NDCG@50"] = dcg / idcg if idcg > 0 else 0.0
+            match_pos = i
+            break
 
-    # Pass@50: 1.0 if any completion in ANY position matches
-    results["Pass@50"] = 1.0 if any(normalize_completion(c) == norm_target for c in completions) else 0.0
+    idcg = 1.0 / math.log2(2)                 # ideal DCG: hit at position 0
+
+    for k in ks:
+        if k > len(completions):
+            continue
+        if 0 <= match_pos < k:
+            results[f"HR@{k}"] = 1.0
+            results[f"NDCG@{k}"] = (1.0 / math.log2(match_pos + 2)) / idcg
+        else:
+            results[f"HR@{k}"] = 0.0
+            results[f"NDCG@{k}"] = 0.0
 
     return results
 
@@ -353,7 +359,7 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
         try:
             completions = constrained_beam_generate(
                 model, tokenizer, prompt, info_file,
-                num_beams=num_beams, max_new_tokens=16, temperature=1.0, device=device
+                num_beams=num_beams, max_new_tokens=256, temperature=1.0, device=device
             )
         except Exception as e:
             print(f"  [{idx}] Generation error: {e}")
@@ -376,13 +382,16 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
         if (idx + 1) % 50 == 0:
             elapsed = time.time() - start
             avg = {k: sum(v) / len(v) for k, v in all_metrics.items()}
-            print(f"  [{idx+1}/{len(df)}] {elapsed:.1f}s | HR@1={avg.get('HR@1', 0):.4f} HR@5={avg.get('HR@5', 0):.4f} HR@20={avg.get('HR@20', 0):.4f}")
+            avg_hr3 = avg.get('HR@3', 0)
+            avg_hr5 = avg.get('HR@5', 0)
+            avg_hr10 = avg.get('HR@10', 0)
+            print(f"  [{idx+1}/{len(df)}] {elapsed:.1f}s | HR@3={avg_hr3:.4f} HR@5={avg_hr5:.4f} HR@10={avg_hr10:.4f}")
 
     # Final report
     elapsed = time.time() - start
     print(f"\n--- Results for {Path(ckpt_path).name} ---")
-    print(f"Samples: {len(all_metrics['HR@1'])} | Time: {elapsed:.1f}s")
-    for k in ("HR@1", "HR@3", "HR@5", "HR@10", "HR@20", "NDCG@50", "Pass@50"):
+    print(f"Samples: {len(all_metrics['HR@3'])} | Time: {elapsed:.1f}s")
+    for k in ("HR@3", "NDCG@3", "HR@5", "NDCG@5", "HR@10", "NDCG@10"):
         if k in all_metrics:
             values = all_metrics[k]
             print(f"  {k:12s}: {sum(values)/len(values):.4f}")
@@ -434,7 +443,7 @@ def main():
         print(f"{'='*60}")
         print(f"{'Metric':12s} | {'CKPT1':>10s} | {'CKPT2':>10s} | {'Delta':>10s}")
         print("-" * 48)
-        for k in ("HR@1", "HR@3", "HR@5", "HR@10", "HR@20", "NDCG@50", "Pass@50"):
+        for k in ("HR@3", "NDCG@3", "HR@5", "NDCG@5", "HR@10", "NDCG@10"):
             v1 = sum(results1[k]) / len(results1[k]) if k in results1 else 0
             v2 = sum(results2[k]) / len(results2[k]) if k in results2 else 0
             delta = v1 - v2
