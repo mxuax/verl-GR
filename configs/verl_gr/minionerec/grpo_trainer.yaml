@@ -68,8 +68,10 @@ actor_rollout_ref:
     kl_loss_type: low_var_kl
     optim:
       lr: 2e-6
-      lr_warmup_steps: 10
+      lr_warmup_steps_ratio: 0.03
       weight_decay: 0.1
+      clip_grad: 0.3
+      lr_scheduler_type: cosine
     fsdp_config:
       model_dtype: bfloat16
     profiler:
@@ -96,7 +98,7 @@ actor_rollout_ref:
       # MiniOneRec semantics: constrained-beam groups per prompt before beam expansion.
       # Effective rollout requests per prompt = num_generations_per_prompt * beam_width.
       num_generations_per_prompt: 1
-      beam_width: 20
+      beam_width: 16
       decode_mode_train: stochastic_constrained
       decode_mode_val: deterministic_beam
       disable_cache_in_train: true

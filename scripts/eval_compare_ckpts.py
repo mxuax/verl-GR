@@ -430,6 +430,7 @@ def main():
     parser.add_argument("--num_beams", type=int, default=50, help="Number of beams (default: 50)")
     parser.add_argument("--max_samples", type=int, default=-1, help="Max test samples (-1 = all)")
     parser.add_argument("--device", default="cuda", help="Device (cuda/cpu)")
+    parser.add_argument("--output", default=None, help="Save results to JSON file")
     args = parser.parse_args()
 
     results1 = evaluate_ckpt(args.ckpt, args.test_file, args.info_file, args.num_beams, args.device, args.max_samples)
@@ -448,6 +449,31 @@ def main():
             v2 = sum(results2[k]) / len(results2[k]) if k in results2 else 0
             delta = v1 - v2
             print(f"{k:12s} | {v1:10.4f} | {v2:10.4f} | {delta:+10.4f}")
+
+    # Save results to JSON if --output specified
+    if args.output:
+        import json as _json
+        from datetime import datetime as _dt
+
+        def _summarize(r):
+            return {k: sum(v) / len(v) if v else 0.0 for k, v in r.items()}
+
+        payload = {
+            "timestamp": _dt.now().isoformat(),
+            "ckpt1": str(args.ckpt),
+            "ckpt1_metrics": _summarize(results1),
+            "test_file": str(args.test_file),
+            "info_file": str(args.info_file),
+            "num_beams": args.num_beams,
+            "num_samples": len(results1.get("HR@3", [])),
+        }
+        if args.ckpt2 and 'results2' in dir():
+            payload["ckpt2"] = str(args.ckpt2)
+            payload["ckpt2_metrics"] = _summarize(results2)
+
+        with open(args.output, "w", encoding="utf-8") as _fh:
+            _json.dump(payload, _fh, indent=2, ensure_ascii=False)
+        print(f"\nResults saved to {args.output}")
 
 
 if __name__ == "__main__":

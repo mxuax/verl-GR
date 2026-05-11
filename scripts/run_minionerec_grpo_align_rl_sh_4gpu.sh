@@ -76,7 +76,7 @@ cd "${VERL_GR_ROOT}"
 bash scripts/run_minionerec_grpo.sh \
   data.shuffle=true \
   data.seed=42 \
-  trainer.val_before_train=false \
+  trainer.val_before_train=true \
   trainer.save_freq=50 \
   trainer.test_freq=50 \
   actor_rollout_ref.actor.kl_loss_coef=0.001 \
