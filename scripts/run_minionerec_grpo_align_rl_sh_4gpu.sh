@@ -69,8 +69,9 @@ export PROJECT_NAME="${PROJECT_NAME:-MiniOneRec_RL}"
 export EXPERIMENT_NAME="${EXPERIMENT_NAME:-minionerec_grpo_rlsh4gpu_$(date +%Y%m%d_%H%M%S)}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
-# 缓解 vLLM cumem_allocator 在长期训练中的 CUDA OOM（显存碎片/慢性泄漏）
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# vLLM CuMemAllocator 与 expandable_segments 不兼容，必须注释。
+# 参见 https://github.com/pytorch/pytorch/issues/147851
+# export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "${VERL_GR_ROOT}"
 bash scripts/run_minionerec_grpo.sh \
