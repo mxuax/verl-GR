@@ -17,6 +17,7 @@ from verl.experimental.agent_loop.agent_loop import (
     get_trajectory_info,
     register,
 )
+from verl.utils.ray_utils import auto_await
 from verl.experimental.agent_loop.single_turn_agent_loop import SingleTurnAgentLoop
 from verl.utils.profiler import simple_timer
 from verl.utils.tokenizer import normalize_token_ids
@@ -208,6 +209,7 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
 
     agent_loop_workers_class = ray.remote(MiniOneRecConstrainedBeamAgentLoopWorker)
 
+    @auto_await
     async def generate_sequences(self, prompts: DataProto) -> DataProto:
         if not self._should_route_to_hf(prompts):
             return await super().generate_sequences(prompts)
