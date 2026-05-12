@@ -231,6 +231,7 @@ class RLTrainer(RayPPOTrainerBase):
             self._task_adapter = TrainerTaskAdapter()
         return self._task_adapter
 
+    @staticmethod
     def _as_float(value: Any, default: float = 0.0) -> float:
         try:
             return float(value)
