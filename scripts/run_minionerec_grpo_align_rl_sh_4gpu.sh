@@ -69,8 +69,8 @@ export PROJECT_NAME="${PROJECT_NAME:-MiniOneRec_RL}"
 export EXPERIMENT_NAME="${EXPERIMENT_NAME:-minionerec_grpo_rlsh4gpu_$(date +%Y%m%d_%H%M%S)}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
-# 可选: 缓解显存碎片
-# export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# 缓解 vLLM cumem_allocator 在长期训练中的 CUDA OOM（显存碎片/慢性泄漏）
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "${VERL_GR_ROOT}"
 bash scripts/run_minionerec_grpo.sh \

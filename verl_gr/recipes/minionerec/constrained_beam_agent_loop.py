@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 import ray
+import torch
+from verl import DataProto
 from verl.experimental.agent_loop.agent_loop import (
     AgentLoopManager,
     AgentLoopOutput,
@@ -147,7 +149,13 @@ class MiniOneRecConstrainedBeamAgentLoopWorker(AgentLoopWorker):
         decode_mode_train = str(rollout_custom.get("decode_mode_train", "stochastic_constrained")).strip().lower()
         decode_mode_val = str(rollout_custom.get("decode_mode_val", "deterministic_beam")).strip().lower()
         decode_mode = decode_mode_val if batch.meta_info.get("validate", False) else decode_mode_train
-        if decode_mode not in {"deterministic_beam", "stochastic_constrained"}:
+        # Accept new HF branch modes (trainer intercepts before agent-loop generate).
+        # Fall back to deterministic_beam only for truly unrecognised values.
+        _beam_modes = {"deterministic_beam", "stochastic_constrained"}
+        _hf_modes = {"hf_constrained_beam_sample", "hf_constrained_beam_eval"}
+        if decode_mode in _hf_modes:
+            decode_mode = "deterministic_beam"  # safe fallback for legacy path
+        elif decode_mode not in _beam_modes:
             decode_mode = "deterministic_beam"
         sampling_params[BEAM_SEARCH_PARAMS_KEY]["decode_mode"] = decode_mode
         sampling_params[BEAM_SEARCH_PARAMS_KEY]["disable_cache_in_train"] = bool(
@@ -189,6 +197,189 @@ class MiniOneRecConstrainedBeamAgentLoopWorker(AgentLoopWorker):
 
 
 class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
-    """Manager that swaps in the MiniOneRec constrained-beam worker."""
+    """Manager that swaps in the MiniOneRec constrained-beam worker.
+
+    Overrides ``generate_sequences`` to route HF decode modes
+    (``hf_constrained_beam_sample`` / ``hf_constrained_beam_eval``)
+    directly to the actor FSDP model, bypassing the per-token Python
+    beam backend.  All other decode modes fall through to the legacy
+    agent-loop + vLLM path.
+    """
 
     agent_loop_workers_class = ray.remote(MiniOneRecConstrainedBeamAgentLoopWorker)
+
+    async def generate_sequences(self, prompts: DataProto) -> DataProto:
+        if not self._should_route_to_hf(prompts):
+            return await super().generate_sequences(prompts)
+        return await self._hf_generate_sequences(prompts)
+
+    # ------------------------------------------------------------------
+    # HF routing helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_hf_decode_mode(self, *, is_validate: bool) -> str:
+        custom = getattr(self.rollout_config, "custom", {}) or {}
+        if hasattr(custom, "items"):
+            custom = dict(custom.items())
+        if isinstance(custom, dict):
+            key = "decode_mode_val" if is_validate else "decode_mode_train"
+            default = "hf_constrained_beam_eval" if is_validate else "hf_constrained_beam_sample"
+            return str(custom.get(key, default)).strip().lower()
+        return ""
+
+    def _should_route_to_hf(self, prompts: DataProto) -> bool:
+        """Check whether the current request should use the HF branch."""
+        decode_mode = self._resolve_hf_decode_mode(is_validate=bool(prompts.meta_info.get("validate", False)))
+        return decode_mode in {"hf_constrained_beam_sample", "hf_constrained_beam_eval"}
+
+    @staticmethod
+    def _extract_prompt_groups(prompts: DataProto, *, rows_per_group: int) -> tuple[list[str], list[int]]:
+        raw_prompt_text = list(prompts.non_tensor_batch.get("raw_prompt_text", []))
+        if not raw_prompt_text:
+            raw_prompt_text = list(prompts.non_tensor_batch.get("raw_prompt", []))
+        if not raw_prompt_text:
+            return [], []
+        if rows_per_group <= 0:
+            raise ValueError(f"rows_per_group must be > 0, got {rows_per_group}")
+
+        group_ids = None
+        for key in ("uid", "index"):
+            values = prompts.non_tensor_batch.get(key)
+            if values is not None and len(values) == len(raw_prompt_text):
+                group_ids = [str(v) for v in values]
+                break
+        if group_ids is None:
+            group_ids = [str(v) for v in raw_prompt_text]
+
+        unique_texts: list[str] = []
+        group_sizes: list[int] = []
+        run_start = 0
+        while run_start < len(group_ids):
+            run_end = run_start + 1
+            while run_end < len(group_ids) and group_ids[run_end] == group_ids[run_start]:
+                run_end += 1
+            run_len = run_end - run_start
+            if run_len % rows_per_group != 0:
+                raise RuntimeError(
+                    f"Prompt group '{group_ids[run_start]}' has {run_len} rows, "
+                    f"which is not divisible by expected beam group size {rows_per_group}."
+                )
+            num_groups = run_len // rows_per_group
+            prompt_text = str(raw_prompt_text[run_start])
+            unique_texts.extend([prompt_text] * num_groups)
+            group_sizes.extend([rows_per_group] * num_groups)
+            run_start = run_end
+        return unique_texts, group_sizes
+
+    async def _hf_generate_sequences(self, prompts: DataProto) -> DataProto:
+        """Route generation to ``actor_rollout_wg.hf_constrained_beam_generate``."""
+        from verl_gr.trainers.rl_trainer import _get_constraint_info_file
+
+        is_validate = bool(prompts.meta_info.get("validate", False))
+        decode_mode = self._resolve_hf_decode_mode(is_validate=is_validate)
+        custom = getattr(self.rollout_config, "custom", {}) or {}
+        if hasattr(custom, "items"):
+            custom = dict(custom.items())
+        beam_width = int(custom.get("beam_width", 16)) if isinstance(custom, dict) else 16
+        val_beam_width = int(custom.get("val_beam_width", beam_width)) if isinstance(custom, dict) else beam_width
+        n_beams = val_beam_width if is_validate else beam_width
+        info_file = _get_constraint_info_file(self.rollout_config)
+        max_new_tokens = int(getattr(self.rollout_config, "response_length", 128) or 128)
+
+        unique_texts, group_sizes = self._extract_prompt_groups(prompts, rows_per_group=n_beams)
+        n_unique = len(unique_texts)
+        if n_unique == 0:
+            return prompts
+
+        meta_info = {
+            "beam_width": beam_width,
+            "val_beam_width": val_beam_width,
+            "do_sample": decode_mode == "hf_constrained_beam_sample",
+            "info_file": info_file,
+            "temperature": float(getattr(self.rollout_config, "temperature", 1.0)),
+            "max_new_tokens": max_new_tokens,
+            "validate": is_validate,
+        }
+
+        # Call actor_rollout_wg via Ray (non-blocking I/O friendly — Ray RPC
+        # releases the GIL so this does not stall the event loop).
+        result = self.worker_group.hf_constrained_beam_generate(unique_texts, meta_info)
+
+        # Reassemble per-rank prompt shards back into original prompt-group order.
+        ordered_response_groups: list[list[list[int]] | None] = [None] * n_unique
+        if isinstance(result, list):
+            for rank_out in result:
+                if isinstance(rank_out, dict):
+                    prompt_indices = list(rank_out.get("prompt_indices", []))
+                    response_groups = list(rank_out.get("response_ids", []))
+                    for prompt_idx, responses_for_prompt in zip(prompt_indices, response_groups, strict=True):
+                        ordered_response_groups[int(prompt_idx)] = [list(r) for r in responses_for_prompt]
+        elif isinstance(result, dict):
+            prompt_indices = list(result.get("prompt_indices", []))
+            response_groups = list(result.get("response_ids", []))
+            for prompt_idx, responses_for_prompt in zip(prompt_indices, response_groups, strict=True):
+                ordered_response_groups[int(prompt_idx)] = [list(r) for r in responses_for_prompt]
+
+        if any(group is None for group in ordered_response_groups):
+            missing = [str(i) for i, group in enumerate(ordered_response_groups) if group is None]
+            raise RuntimeError(f"HF constrained beam returned incomplete prompt shards: missing {', '.join(missing)}")
+
+        all_resp_ids = [resp for group in ordered_response_groups for resp in (group or [])]
+        n_total = len(all_resp_ids)
+        if n_total == 0:
+            return prompts
+        expected_total = sum(group_sizes)
+        if expected_total != len(prompts):
+            raise RuntimeError(
+                f"HF prompt-group reconstruction expected {len(prompts)} rows, "
+                f"but grouped input collapsed to {expected_total}."
+            )
+        if n_total != expected_total:
+            raise RuntimeError(
+                f"HF constrained beam returned {n_total} sequences, "
+                f"but input batch expects {expected_total} rows."
+            )
+
+        # Assemble DataProto with full tensor fields
+        max_resp = max(len(r) for r in all_resp_ids) if all_resp_ids else 1
+        device = prompts.batch["input_ids"].device
+        pad_id = int(prompts.meta_info.get("pad_token_id", 0) or 0)
+        responses = torch.full((n_total, max_resp), pad_id, dtype=torch.long, device=device)
+        for i, r in enumerate(all_resp_ids):
+            if r:
+                responses[i, :len(r)] = torch.tensor(r, dtype=torch.long, device=device)
+
+        prompt_ids_exp = prompts.batch["input_ids"]
+        attn_exp = prompts.batch["attention_mask"]
+        pos_exp = prompts.batch["position_ids"]
+
+        resp_mask = torch.ones(n_total, max_resp, dtype=attn_exp.dtype, device=device)
+        eos_id = int(prompts.meta_info.get("eos_token_id", 0) or 0)
+        for i, r in enumerate(all_resp_ids):
+            for j, tid in enumerate(r):
+                if eos_id and tid == eos_id:
+                    resp_mask[i, j+1:] = 0
+                    break
+            if len(r) < max_resp:
+                resp_mask[i, len(r):] = 0
+
+        input_ids = torch.cat([prompt_ids_exp, responses], dim=1)
+        attention_mask = torch.cat([attn_exp, resp_mask], dim=1)
+        last_pos = pos_exp[:, -1:]
+        delta_pos = torch.arange(1, max_resp + 1, device=responses.device).unsqueeze(0)
+        position_ids = torch.cat([pos_exp, last_pos + delta_pos], dim=1)
+
+        out = DataProto.from_dict(
+            tensors={
+                "prompts": prompt_ids_exp,
+                "responses": responses,
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            },
+            meta_info=prompts.meta_info,
+        )
+        for key, arr in prompts.non_tensor_batch.items():
+            if isinstance(arr, np.ndarray):
+                out.non_tensor_batch[key] = arr
+        return out

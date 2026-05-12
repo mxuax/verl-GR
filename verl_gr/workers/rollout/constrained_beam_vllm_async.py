@@ -94,6 +94,8 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
         return "verl_gr.workers.rollout.zmq_utils.VerlGRVLLMColocateWorkerExtension"
 
     async def abort_all_requests(self, reset_prefix_cache: bool = True) -> dict[str, Any]:
+        import gc as _gc
+
         build_tasks = list(self._constrained_beam_build_tasks.values())
         cancelled_count = 0
         for task in build_tasks:
@@ -106,6 +108,13 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
         cleared_cache_entries = len(self._constrained_beam_cache)
         self._constrained_beam_cache.clear()
         result = await super().abort_all_requests(reset_prefix_cache=reset_prefix_cache)
+        # Free CUDA memory accumulated by frequent weight updates
+        _gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
         result["constrained_beam_cancelled_build_tasks"] = cancelled_count
         result["constrained_beam_cleared_cache_entries"] = cleared_cache_entries
         return result
@@ -422,6 +431,7 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
             eos_token_id=eos_token_id,
             ignore_eos=beam_config.ignore_eos,
             length_penalty=beam_config.length_penalty,
+            temperature=beam_config.temperature,
             generate_next_tokens=generate_next_tokens,
             allowed_tokens_fn=allowed_tokens_fn,
             decode_mode=beam_config.decode_mode,

@@ -155,6 +155,30 @@ def compute_advantage(
     return data
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_constraint_info_file(rollout_config) -> str:
+    """Extract info_file path from rollout custom config (OmegaConf-safe)."""
+    custom = getattr(rollout_config, "custom", {}) or {}
+    if hasattr(custom, "items"):
+        custom = dict(custom.items())
+    if isinstance(custom, dict):
+        beam_params = custom.get("beam_search_params", {}) or {}
+        if hasattr(beam_params, "items"):
+            beam_params = dict(beam_params.items())
+        if isinstance(beam_params, dict):
+            constraint = beam_params.get("constraint", {}) or {}
+            if hasattr(constraint, "items"):
+                constraint = dict(constraint.items())
+            if isinstance(constraint, dict):
+                info = constraint.get("info_file", "")
+                return str(info) if info else ""
+    return ""
+
+
 class RLTrainer(RayPPOTrainerBase):
     """RayPPOTrainer override with different workload helpers."""
 
@@ -207,7 +231,6 @@ class RLTrainer(RayPPOTrainerBase):
             self._task_adapter = TrainerTaskAdapter()
         return self._task_adapter
 
-    @staticmethod
     def _as_float(value: Any, default: float = 0.0) -> float:
         try:
             return float(value)

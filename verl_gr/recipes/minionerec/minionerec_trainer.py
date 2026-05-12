@@ -92,10 +92,11 @@ class MiniOneRecTrainerAdapter(TrainerTaskAdapter):
             rollout_cfg = trainer.config.actor_rollout_ref.rollout
             rollout_custom = rollout_cfg.get("custom") or {}
             beam_width = int(rollout_custom.get(BEAM_WIDTH_KEY, val_kwargs.get("n", 1)))
+            val_beam_width = int(rollout_custom.get("val_beam_width", beam_width))
             base_generations_per_prompt = int(
                 rollout_custom.get("num_generations_per_prompt", max(1, int(rollout_cfg.get("n", 1)) // max(beam_width, 1)))
             )
-            repeat_times = max(1, base_generations_per_prompt) * max(1, beam_width)
+            repeat_times = max(1, base_generations_per_prompt) * max(1, val_beam_width)
             test_batch = test_batch.repeat(repeat_times=repeat_times, interleave=True)
 
             input_ids = test_batch.batch["input_ids"]

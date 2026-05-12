@@ -1,5 +1,11 @@
+from __future__ import annotations
+
 import ast
 from pathlib import Path
+
+
+def _read_text(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
 
 
 def _get_class(module: ast.Module, class_name: str) -> ast.ClassDef:
@@ -17,7 +23,7 @@ def _get_method(class_node: ast.ClassDef, method_name: str) -> ast.FunctionDef |
 
 
 def test_rl_trainer_validate_routes_to_task_adapter():
-    source = Path("verl_gr/trainers/rl_trainer.py").read_text()
+    source = _read_text("verl_gr/trainers/rl_trainer.py")
     module = ast.parse(source)
     trainer_cls = _get_class(module, "RLTrainer")
     validate_method = _get_method(trainer_cls, "_validate")
@@ -38,7 +44,7 @@ def test_rl_trainer_validate_routes_to_task_adapter():
 
 
 def test_rl_trainer_reward_colocate_routes_postprocess_rewards():
-    source = Path("verl_gr/trainers/rl_trainer.py").read_text()
+    source = _read_text("verl_gr/trainers/rl_trainer.py")
     module = ast.parse(source)
     trainer_cls = _get_class(module, "RLTrainer")
     method = _get_method(trainer_cls, "_compute_reward_colocate")
@@ -56,7 +62,7 @@ def test_rl_trainer_reward_colocate_routes_postprocess_rewards():
 
 
 def test_minionerec_validation_groups_by_uid_not_prompt_text():
-    source = Path("verl_gr/recipes/minionerec/minionerec_trainer.py").read_text()
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_trainer.py")
     module = ast.parse(source)
     adapter_cls = _get_class(module, "MiniOneRecTrainerAdapter")
     method = _get_method(adapter_cls, "_compute_ranking_metrics")
@@ -68,7 +74,7 @@ def test_minionerec_validation_groups_by_uid_not_prompt_text():
 
 
 def test_minionerec_dataset_disables_alignment_for_val_by_default():
-    source = Path("verl_gr/recipes/minionerec/minionerec_dataset.py").read_text()
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_dataset.py")
     module = ast.parse(source)
     dataset_cls = _get_class(module, "MiniOneRecDataset")
     init_method = _get_method(dataset_cls, "__init__")
@@ -80,7 +86,7 @@ def test_minionerec_dataset_disables_alignment_for_val_by_default():
 
 
 def test_minionerec_agent_loop_supports_train_val_decode_modes():
-    source = Path("verl_gr/recipes/minionerec/constrained_beam_agent_loop.py").read_text()
+    source = _read_text("verl_gr/recipes/minionerec/constrained_beam_agent_loop.py")
     module = ast.parse(source)
     worker_cls = _get_class(module, "MiniOneRecConstrainedBeamAgentLoopWorker")
     generate_fn = _get_method(worker_cls, "generate_sequences")
@@ -93,6 +99,77 @@ def test_minionerec_agent_loop_supports_train_val_decode_modes():
 
 
 def test_constrained_beam_server_has_stochastic_mode_branch():
-    source = Path("verl_gr/workers/rollout/constrained_beam_vllm_async.py").read_text()
+    source = _read_text("verl_gr/workers/rollout/constrained_beam_vllm_async.py")
     assert 'beam_config.decode_mode == "stochastic_constrained"' in source
     assert "_run_constrained_stochastic_sample" in source
+
+
+# ---------------------------------------------------------------------------
+# HF branch contracts
+# ---------------------------------------------------------------------------
+
+
+def test_agent_loop_recognizes_hf_decode_modes():
+    source = _read_text("verl_gr/recipes/minionerec/constrained_beam_agent_loop.py")
+    assert '"hf_constrained_beam_sample"' in source
+    assert '"hf_constrained_beam_eval"' in source
+
+
+def test_worker_has_hf_beam_generate_method():
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_fsdp_workers.py")
+    module = ast.parse(source)
+    worker_cls = _get_class(module, "MiniOneRecActorRolloutRefWorker")
+    method = _get_method(worker_cls, "hf_constrained_beam_generate")
+    segment = ast.get_source_segment(source, method) or ""
+    assert "HfConstrainedBeamGenerator" in segment
+    assert "summon_full_params" in segment
+    assert "my_prompt_indices" in segment  # rank sharding
+    assert '"prompt_indices"' in segment
+
+
+def test_hf_constrained_generator_exports_train_eval():
+    source = _read_text("verl_gr/recipes/minionerec/hf_constrained_generation.py")
+    assert "class HfConstrainedBeamGenerator" in source
+    assert "def generate_train(" in source
+    assert "def generate_eval(" in source
+    assert "do_sample=True" in source or 'do_sample=True' in source
+    assert "do_sample=False" in source or 'do_sample=False' in source
+
+
+def test_agent_loop_manager_has_hf_generate_routing():
+    source = _read_text("verl_gr/recipes/minionerec/constrained_beam_agent_loop.py")
+    module = ast.parse(source)
+    manager_cls = _get_class(module, "MiniOneRecConstrainedBeamAgentLoopManager")
+    _get_method(manager_cls, "_resolve_hf_decode_mode")
+    _get_method(manager_cls, "_should_route_to_hf")
+    _get_method(manager_cls, "_hf_generate_sequences")
+    assert 'prompts.meta_info.get("validate", False)' in source
+    assert '"decode_mode_val"' in source
+    assert '"decode_mode_train"' in source
+
+
+def test_agent_loop_manager_builds_full_tensor_batch_for_hf_outputs():
+    source = _read_text("verl_gr/recipes/minionerec/constrained_beam_agent_loop.py")
+    manager_start = source.index("class MiniOneRecConstrainedBeamAgentLoopManager")
+    segment = source[manager_start:]
+    for key in ('"prompts"', '"responses"', '"input_ids"', '"attention_mask"', '"position_ids"'):
+        assert key in segment
+    assert "ordered_response_groups" in segment
+    assert "prompt_indices" in segment
+
+
+def test_minionerec_validation_uses_val_beam_width():
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_trainer.py")
+    assert 'rollout_custom.get("val_beam_width", beam_width)' in source
+    assert "repeat_times = max(1, base_generations_per_prompt) * max(1, val_beam_width)" in source
+
+
+def test_yaml_uses_hf_decode_modes():
+    source = _read_text("configs/verl_gr/minionerec/grpo_trainer.yaml")
+    assert "hf_constrained_beam_sample" in source
+    assert "hf_constrained_beam_eval" in source
+
+
+def test_openonerec_yaml_has_stage2_decode_mode():
+    source = _read_text("configs/verl_gr/openonerec/grpo_trainer.yaml")
+    assert "stage2_decode_mode: vllm_native_beam" in source

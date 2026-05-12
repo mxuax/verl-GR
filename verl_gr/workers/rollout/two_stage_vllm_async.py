@@ -389,6 +389,7 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
             eos_token_id=eos_token_id,
             ignore_eos=beam_config.ignore_eos,
             length_penalty=beam_config.length_penalty,
+            temperature=beam_config.temperature,
             generate_next_tokens=generate_next_tokens,
         )
 
