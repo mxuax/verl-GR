@@ -228,9 +228,16 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
         return ""
 
     def _should_route_to_hf(self, prompts: DataProto) -> bool:
-        """Check whether the current request should use the HF branch."""
-        decode_mode = self._resolve_hf_decode_mode(is_validate=bool(prompts.meta_info.get("validate", False)))
-        return decode_mode in {"hf_constrained_beam_sample", "hf_constrained_beam_eval"}
+        """Check whether the current request should use the HF branch.
+
+        HF routing only applies during *training*.  Validation requests still go
+        through the agent-loop legacy path (which already handles beam expansion
+        and constraint via the adapter).
+        """
+        if bool(prompts.meta_info.get("validate", False)):
+            return False
+        decode_mode = self._resolve_hf_decode_mode(is_validate=False)
+        return decode_mode == "hf_constrained_beam_sample"
 
     @staticmethod
     def _extract_prompt_groups(prompts: DataProto, *, rows_per_group: int) -> tuple[list[str], list[int]]:
