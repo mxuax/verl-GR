@@ -415,5 +415,5 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
         # verl training loop (ray_trainer.py:1404) expects multi_modal_inputs in every batch.
         # MiniOneRec is a text-only task, so supply an empty placeholder.
         if "multi_modal_inputs" not in out.non_tensor_batch:
-            out.non_tensor_batch["multi_modal_inputs"] = np.empty(n_total, dtype=object)
+            out.non_tensor_batch["multi_modal_inputs"] = np.array([{} for _ in range(n_total)], dtype=object)
         return out
