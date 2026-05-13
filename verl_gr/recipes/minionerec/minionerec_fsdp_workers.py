@@ -76,6 +76,7 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
             val_beam_width=int(meta_info.get("val_beam_width", beam_width)),
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            micro_batch_size=int(meta_info.get("hf_micro_batch_size", 16)),
         )
 
         actor_module.eval()

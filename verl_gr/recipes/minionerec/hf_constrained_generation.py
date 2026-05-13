@@ -40,7 +40,7 @@ class HfConstrainedBeamGenerator:
         temperature: float = 1.0,
         length_penalty: float = 0.0,
         prefix_index: int | None = None,
-        micro_batch_size: int = 8,
+        micro_batch_size: int = 16,
     ):
         self._tokenizer = tokenizer
         self._beam_width = beam_width
@@ -56,6 +56,7 @@ class HfConstrainedBeamGenerator:
             prefix_index = 4 if "gpt2" in str(type(tokenizer)).lower() else 3
         self._prefix_index = prefix_index
 
+        self._tokenizer.padding_side = "left"  # decoder-only models require left-padding
         self._hash_dict = _build_hash_dict(info_file, tokenizer)
 
     # ------------------------------------------------------------------
