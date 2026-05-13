@@ -194,6 +194,14 @@ class RLTrainer(RayPPOTrainerBase):
 
             ray_trainer_mod.compute_advantage = compute_advantage
 
+    def init_workers(self):
+        super().init_workers()
+        # MiniOneRec uses a rule-based reward function but has no RM.
+        # self.use_rm is False by default, preventing _compute_reward_colocate
+        # from running.  We force it to True AFTER init so that RM workers
+        # are NOT created but postprocess_rewards still sets rm_scores.
+        self.use_rm = True
+
     def fit(self):
         logging_steps = self._as_int(_cfg_get(self.config.trainer, "logging_steps", 1), default=1)
         if logging_steps <= 1:
