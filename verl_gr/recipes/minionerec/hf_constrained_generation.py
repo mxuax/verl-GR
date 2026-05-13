@@ -40,6 +40,7 @@ class HfConstrainedBeamGenerator:
         temperature: float = 1.0,
         length_penalty: float = 0.0,
         prefix_index: int | None = None,
+        micro_batch_size: int = 8,
     ):
         self._tokenizer = tokenizer
         self._beam_width = beam_width
@@ -47,6 +48,7 @@ class HfConstrainedBeamGenerator:
         self._max_new_tokens = max_new_tokens
         self._temperature = temperature
         self._length_penalty = length_penalty
+        self._micro_batch_size = micro_batch_size
         self._eos_token_id = tokenizer.eos_token_id
         self._pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
 
@@ -75,13 +77,23 @@ class HfConstrainedBeamGenerator:
     def _generate(
         self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool
     ) -> list[HfBeamOutput]:
-        """Batched constrained beam generation — all prompts in one ``model.generate()`` call."""
+        """Batched constrained beam generation — micro-batched to control VRAM."""
         if not prompts:
             return []
 
+        outputs: list[HfBeamOutput] = []
+        micro_batch = self._micro_batch_size
+        for batch_start in range(0, len(prompts), micro_batch):
+            batch_end = min(batch_start + micro_batch, len(prompts))
+            chunk = prompts[batch_start:batch_end]
+            outputs.extend(self._generate_chunk(model, chunk, beam_width=beam_width, do_sample=do_sample))
+        return outputs
+
+    def _generate_chunk(
+        self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool
+    ) -> list[HfBeamOutput]:
         device = next(model.parameters()).device
 
-        # Tokenize and pad all prompts to the same length
         encoded = self._tokenizer(prompts, return_tensors="pt", add_special_tokens=False, padding=True)
         input_ids = encoded["input_ids"].to(device)
         attn_mask = encoded["attention_mask"].to(device)
@@ -119,31 +131,24 @@ class HfConstrainedBeamGenerator:
                 use_cache=True,
             )
 
-        # output.sequences: (n_prompts * beam_width, total_len)
         seqs = output.sequences
-        total_seqs = seqs.shape[0]
-
-        outputs: list[HfBeamOutput] = []
+        chunk_outputs: list[HfBeamOutput] = []
         for p_idx in range(n_prompts):
             prompt_len = int(prompt_lens[p_idx])
             completions: list[list[int]] = []
             for b_idx in range(beam_width):
                 seq_idx = p_idx * beam_width + b_idx
                 gen_ids = seqs[seq_idx, prompt_len:].tolist()
-                clean_ids = []
-                for tid in gen_ids:
-                    if tid == self._pad_token_id:
-                        break
-                    clean_ids.append(tid)
+                clean_ids = [tid for tid in gen_ids if tid != self._pad_token_id]
                 completions.append(clean_ids)
             decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
-            outputs.append(HfBeamOutput(
+            chunk_outputs.append(HfBeamOutput(
                 prompt_token_ids=input_ids[p_idx, :prompt_len].tolist(),
                 response_token_ids=completions,
                 decoded_completions=decoded,
                 beam_width=beam_width,
             ))
-        return outputs
+        return chunk_outputs
 
 
 # ---------------------------------------------------------------------------
