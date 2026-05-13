@@ -378,6 +378,8 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
         delta_pos = torch.arange(1, max_resp + 1, device=responses.device).unsqueeze(0)
         position_ids = torch.cat([pos_exp, last_pos + delta_pos], dim=1)
 
+        out_meta = dict(prompts.meta_info)
+        out_meta.setdefault("timing", {})
         out = DataProto.from_dict(
             tensors={
                 "prompts": prompt_ids_exp,
@@ -386,7 +388,7 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
                 "attention_mask": attention_mask,
                 "position_ids": position_ids,
             },
-            meta_info=prompts.meta_info,
+            meta_info=out_meta,
         )
         for key, arr in prompts.non_tensor_batch.items():
             if isinstance(arr, np.ndarray):
