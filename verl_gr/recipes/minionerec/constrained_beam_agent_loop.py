@@ -351,6 +351,13 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
 
         # Assemble DataProto with full tensor fields
         max_resp = max(len(r) for r in all_resp_ids) if all_resp_ids else 1
+
+        # ensure dense (B, L) tensors — remove_padding may produce NestedTensors
+        def _to_dense(t: torch.Tensor) -> torch.Tensor:
+            if t.is_nested:
+                return t.to_padded_tensor(padding=0.0)
+            return t
+
         device = prompts.batch["input_ids"].device
         pad_id = int(prompts.meta_info.get("pad_token_id", 0) or 0)
         responses = torch.full((n_total, max_resp), pad_id, dtype=torch.long, device=device)
@@ -358,9 +365,22 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
             if r:
                 responses[i, :len(r)] = torch.tensor(r, dtype=torch.long, device=device)
 
-        prompt_ids_exp = prompts.batch["input_ids"]
-        attn_exp = prompts.batch["attention_mask"]
-        pos_exp = prompts.batch["position_ids"]
+        prompt_ids_exp = _to_dense(prompts.batch["input_ids"])
+        attn_exp = _to_dense(prompts.batch["attention_mask"])
+        pos_exp = _to_dense(prompts.batch["position_ids"])
+
+        # sanity: input tensor rows should match n_unique (or repeat-factor adjusted)
+        if prompt_ids_exp.shape[0] != n_total:
+            if prompt_ids_exp.shape[0] == n_unique:
+                rep = n_total // n_unique
+                prompt_ids_exp = prompt_ids_exp.repeat_interleave(rep, dim=0)
+                attn_exp = attn_exp.repeat_interleave(rep, dim=0)
+                pos_exp = pos_exp.repeat_interleave(rep, dim=0)
+            else:
+                raise RuntimeError(
+                    f"Prompt tensor batch size {prompt_ids_exp.shape[0]} "
+                    f"does not match response count {n_total}."
+                )
 
         resp_mask = torch.ones(n_total, max_resp, dtype=attn_exp.dtype, device=device)
         eos_id = int(prompts.meta_info.get("eos_token_id", 0) or 0)
@@ -391,6 +411,5 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
             meta_info=out_meta,
         )
         for key, arr in prompts.non_tensor_batch.items():
-            if isinstance(arr, np.ndarray):
-                out.non_tensor_batch[key] = arr
+            out.non_tensor_batch[key] = arr
         return out
