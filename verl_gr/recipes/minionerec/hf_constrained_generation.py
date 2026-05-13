@@ -75,20 +75,18 @@ class HfConstrainedBeamGenerator:
     def _generate(
         self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool
     ) -> list[HfBeamOutput]:
-        outputs: list[HfBeamOutput] = []
-        for prompt in prompts:
-            out = self._generate_one(model, prompt, beam_width=beam_width, do_sample=do_sample)
-            outputs.append(out)
-        return outputs
+        """Batched constrained beam generation — all prompts in one ``model.generate()`` call."""
+        if not prompts:
+            return []
 
-    def _generate_one(
-        self, model: torch.nn.Module, prompt: str, *, beam_width: int, do_sample: bool
-    ) -> HfBeamOutput:
-        # add_special_tokens=False matches original MiniOneRec training prompt tokenization
-        inputs = self._tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
-        input_ids = inputs["input_ids"]
-        prompt_len = input_ids.shape[1]
         device = next(model.parameters()).device
+
+        # Tokenize and pad all prompts to the same length
+        encoded = self._tokenizer(prompts, return_tensors="pt", add_special_tokens=False, padding=True)
+        input_ids = encoded["input_ids"].to(device)
+        attn_mask = encoded["attention_mask"].to(device)
+        n_prompts = input_ids.shape[0]
+        prompt_lens = attn_mask.sum(dim=1).tolist()
 
         logits_processor = LogitsProcessorList([
             _make_constraint_processor(
@@ -112,8 +110,8 @@ class HfConstrainedBeamGenerator:
 
         with torch.no_grad():
             output = model.generate(
-                input_ids=input_ids.to(device),
-                attention_mask=torch.ones_like(input_ids).to(device),
+                input_ids=input_ids,
+                attention_mask=attn_mask,
                 generation_config=gen_config,
                 logits_processor=logits_processor,
                 output_scores=False,
@@ -121,30 +119,31 @@ class HfConstrainedBeamGenerator:
                 use_cache=True,
             )
 
-        # Extract per-beam completions
-        seqs = output.sequences  # (beam_width, total_len)
-        completions: list[list[int]] = []
-        log_probs_list: list[list[float]] = []
-        for i in range(seqs.shape[0]):
-            gen_ids = seqs[i, prompt_len:].tolist()
-            # Strip trailing pads
-            clean_ids = []
-            for tid in gen_ids:
-                if tid == self._pad_token_id:
-                    break
-                clean_ids.append(tid)
-            completions.append(clean_ids)
-            log_probs_list.append([])  # HF generate doesn't return per-token logprobs easily
+        # output.sequences: (n_prompts * beam_width, total_len)
+        seqs = output.sequences
+        total_seqs = seqs.shape[0]
 
-        # Decode to string for compatibility
-        decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
-
-        return HfBeamOutput(
-            prompt_token_ids=input_ids[0].tolist(),
-            response_token_ids=completions,
-            decoded_completions=decoded,
-            beam_width=beam_width,
-        )
+        outputs: list[HfBeamOutput] = []
+        for p_idx in range(n_prompts):
+            prompt_len = int(prompt_lens[p_idx])
+            completions: list[list[int]] = []
+            for b_idx in range(beam_width):
+                seq_idx = p_idx * beam_width + b_idx
+                gen_ids = seqs[seq_idx, prompt_len:].tolist()
+                clean_ids = []
+                for tid in gen_ids:
+                    if tid == self._pad_token_id:
+                        break
+                    clean_ids.append(tid)
+                completions.append(clean_ids)
+            decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
+            outputs.append(HfBeamOutput(
+                prompt_token_ids=input_ids[p_idx, :prompt_len].tolist(),
+                response_token_ids=completions,
+                decoded_completions=decoded,
+                beam_width=beam_width,
+            ))
+        return outputs
 
 
 # ---------------------------------------------------------------------------

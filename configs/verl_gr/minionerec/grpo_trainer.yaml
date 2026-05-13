@@ -67,7 +67,7 @@ actor_rollout_ref:
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     optim:
-      lr: 2e-6
+      lr: 1e-5
       lr_warmup_steps_ratio: 0.03
       weight_decay: 0.1
       clip_grad: 0.3
