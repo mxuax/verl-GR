@@ -99,7 +99,7 @@ class HfConstrainedBeamGenerator:
         input_ids = encoded["input_ids"].to(device)
         attn_mask = encoded["attention_mask"].to(device)
         n_prompts = input_ids.shape[0]
-        prompt_lens = attn_mask.sum(dim=1).tolist()
+        prompt_width = input_ids.shape[1]
 
         logits_processor = LogitsProcessorList([
             _make_constraint_processor(
@@ -135,16 +135,15 @@ class HfConstrainedBeamGenerator:
         seqs = output.sequences
         chunk_outputs: list[HfBeamOutput] = []
         for p_idx in range(n_prompts):
-            prompt_len = int(prompt_lens[p_idx])
             completions: list[list[int]] = []
             for b_idx in range(beam_width):
                 seq_idx = p_idx * beam_width + b_idx
-                gen_ids = seqs[seq_idx, prompt_len:].tolist()
+                gen_ids = seqs[seq_idx, prompt_width:].tolist()
                 clean_ids = [tid for tid in gen_ids if tid != self._pad_token_id]
                 completions.append(clean_ids)
             decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
             chunk_outputs.append(HfBeamOutput(
-                prompt_token_ids=input_ids[p_idx, :prompt_len].tolist(),
+                prompt_token_ids=input_ids[p_idx, attn_mask[p_idx].bool()].tolist(),
                 response_token_ids=completions,
                 decoded_completions=decoded,
                 beam_width=beam_width,

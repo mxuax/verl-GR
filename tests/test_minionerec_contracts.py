@@ -136,6 +136,20 @@ def test_hf_constrained_generator_exports_train_eval():
     assert "do_sample=False" in source or 'do_sample=False' in source
 
 
+def test_hf_batch_generation_slices_after_padded_prompt_width():
+    source = _read_text("verl_gr/recipes/minionerec/hf_constrained_generation.py")
+    module = ast.parse(source)
+    generator_cls = _get_class(module, "HfConstrainedBeamGenerator")
+    method = _get_method(generator_cls, "_generate_chunk")
+    segment = ast.get_source_segment(source, method) or ""
+
+    assert "self._tokenizer.padding_side = \"left\"" in source
+    assert "prompt_width = input_ids.shape[1]" in segment
+    assert "seqs[seq_idx, prompt_width:]" in segment
+    assert "seqs[seq_idx, prompt_len:]" not in segment
+    assert "input_ids[p_idx, attn_mask[p_idx].bool()].tolist()" in segment
+
+
 def test_agent_loop_manager_has_hf_generate_routing():
     source = _read_text("verl_gr/recipes/minionerec/constrained_beam_agent_loop.py")
     module = ast.parse(source)
