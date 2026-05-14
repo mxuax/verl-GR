@@ -119,6 +119,10 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
             micro_batch_size=int(meta_info.get("hf_micro_batch_size", 16)),
         )
 
+        prompt_token_ids = meta_info.get("prompt_token_ids")
+        if prompt_token_ids is not None:
+            my_prompt_ids = [prompt_token_ids[i] for i in my_prompt_indices]
+
         actor_module.eval()
         param_ctx = contextlib.nullcontext()
         if isinstance(actor_module, FSDP):
@@ -126,9 +130,13 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
 
         with param_ctx, torch.inference_mode():
             if do_sample and not is_validate:
-                outputs = gen.generate_train(actor_module, my_prompts)
+                outputs = gen.generate_train(
+                    actor_module, my_prompts, prompt_token_ids=my_prompt_ids if prompt_token_ids is not None else None
+                )
             else:
-                outputs = gen.generate_eval(actor_module, my_prompts)
+                outputs = gen.generate_eval(
+                    actor_module, my_prompts, prompt_token_ids=my_prompt_ids if prompt_token_ids is not None else None
+                )
 
         actor_module.train()
 

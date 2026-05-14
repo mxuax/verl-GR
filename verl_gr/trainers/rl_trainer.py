@@ -134,6 +134,7 @@ def compute_advantage(
                 token_level_rewards=data.batch["token_level_rewards"],
                 response_mask=data.batch["response_mask"],
                 index=data.non_tensor_batch["uid"],
+                epsilon=1e-4,
                 norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
             )
             data.batch["advantages"] = advantages

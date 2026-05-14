@@ -58,10 +58,14 @@ actor_rollout_ref:
     # 与 ref 一致：rmpad 路径下用分块熵，避免 (bsz, seq, vocab) 全量 softmax 导致数十 GB 峰值
     entropy_from_logits_with_chunking: true
     entropy_checkpointing: true
-    clip_ratio_high: 0.28
+    # Pure REINFORCE (no PPO clipping) — matches original MiniOneRec.
+    clip_ratio_low: 100.0
+    clip_ratio_high: 100.0
+    clip_ratio_c: 100.0
     use_dynamic_bsz: true
     ppo_mini_batch_size: 8
     ppo_max_token_len_per_gpu: 40960
+    loss_agg_mode: seq-mean-token-mean
     use_kl_loss: true
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl

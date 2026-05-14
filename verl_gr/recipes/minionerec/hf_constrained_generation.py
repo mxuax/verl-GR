@@ -63,20 +63,27 @@ class HfConstrainedBeamGenerator:
     # Public API
     # ------------------------------------------------------------------
 
-    def generate_train(self, model: torch.nn.Module, prompts: list[str]) -> list[HfBeamOutput]:
+    def generate_train(
+        self, model: torch.nn.Module, prompts: list[str], *, prompt_token_ids: list[list[int]] | None = None
+    ) -> list[HfBeamOutput]:
         """Training: constrained stochastic beam sampling (do_sample=True)."""
-        return self._generate(model, prompts, beam_width=self._beam_width, do_sample=True)
+        return self._generate(model, prompts, beam_width=self._beam_width, do_sample=True,
+                              prompt_token_ids=prompt_token_ids)
 
-    def generate_eval(self, model: torch.nn.Module, prompts: list[str]) -> list[HfBeamOutput]:
+    def generate_eval(
+        self, model: torch.nn.Module, prompts: list[str], *, prompt_token_ids: list[list[int]] | None = None
+    ) -> list[HfBeamOutput]:
         """Evaluation: constrained deterministic beam (do_sample=False)."""
-        return self._generate(model, prompts, beam_width=self._val_beam_width, do_sample=False)
+        return self._generate(model, prompts, beam_width=self._val_beam_width, do_sample=False,
+                              prompt_token_ids=prompt_token_ids)
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     def _generate(
-        self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool
+        self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool,
+        prompt_token_ids: list[list[int]] | None = None,
     ) -> list[HfBeamOutput]:
         """Batched constrained beam generation — micro-batched to control VRAM."""
         if not prompts:
@@ -87,19 +94,35 @@ class HfConstrainedBeamGenerator:
         for batch_start in range(0, len(prompts), micro_batch):
             batch_end = min(batch_start + micro_batch, len(prompts))
             chunk = prompts[batch_start:batch_end]
-            outputs.extend(self._generate_chunk(model, chunk, beam_width=beam_width, do_sample=do_sample))
+            ids_chunk = prompt_token_ids[batch_start:batch_end] if prompt_token_ids else None
+            outputs.extend(self._generate_chunk(model, chunk, beam_width=beam_width, do_sample=do_sample,
+                                                 prompt_token_ids=ids_chunk))
         return outputs
 
     def _generate_chunk(
-        self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool
+        self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool,
+        prompt_token_ids: list[list[int]] | None = None,
     ) -> list[HfBeamOutput]:
         device = next(model.parameters()).device
 
-        encoded = self._tokenizer(prompts, return_tensors="pt", add_special_tokens=False, padding=True)
-        input_ids = encoded["input_ids"].to(device)
-        attn_mask = encoded["attention_mask"].to(device)
+        if prompt_token_ids is not None and len(prompt_token_ids) == len(prompts):
+            # Use pre-tokenized prompt IDs from the dataset (already truncated).
+            # Left-pad to equal length.
+            max_len = max(len(ids) for ids in prompt_token_ids)
+            pad_id = self._pad_token_id
+            input_ids = torch.full((len(prompts), max_len), pad_id, dtype=torch.long, device=device)
+            attn_mask = torch.zeros((len(prompts), max_len), dtype=torch.long, device=device)
+            for i, ids in enumerate(prompt_token_ids):
+                L = len(ids)
+                input_ids[i, max_len - L:] = torch.tensor(ids, dtype=torch.long, device=device)
+                attn_mask[i, max_len - L:] = 1
+            prompt_lens = [len(ids) for ids in prompt_token_ids]
+        else:
+            encoded = self._tokenizer(prompts, return_tensors="pt", add_special_tokens=False, padding=True)
+            input_ids = encoded["input_ids"].to(device)
+            attn_mask = encoded["attention_mask"].to(device)
+            prompt_lens = attn_mask.sum(dim=1).tolist()
         n_prompts = input_ids.shape[0]
-        prompt_lens = attn_mask.sum(dim=1).tolist()
 
         logits_processor = LogitsProcessorList([
             _make_constraint_processor(
@@ -117,6 +140,8 @@ class HfConstrainedBeamGenerator:
             num_return_sequences=beam_width,
             do_sample=do_sample,
             temperature=self._temperature if do_sample else 1.0,
+            top_k=None,
+            top_p=None,
             pad_token_id=self._pad_token_id,
             eos_token_id=self._eos_token_id,
         )
@@ -133,18 +158,26 @@ class HfConstrainedBeamGenerator:
             )
 
         seqs = output.sequences
+        padded_input_len = input_ids.shape[1]  # uniform after left-padding
         chunk_outputs: list[HfBeamOutput] = []
         for p_idx in range(n_prompts):
             prompt_len = int(prompt_lens[p_idx])
             completions: list[list[int]] = []
             for b_idx in range(beam_width):
                 seq_idx = p_idx * beam_width + b_idx
-                gen_ids = seqs[seq_idx, prompt_len:].tolist()
+                # Slice from the uniform padded length, NOT individual prompt_len.
+                # Left-padding means shorter prompts have PAD tokens before the real
+                # prompt; using prompt_len would include real prompt tokens in the
+                # completion.  Mirrors evaluate.py: sequences[:, maxLen:].
+                gen_ids = seqs[seq_idx, padded_input_len:].tolist()
                 clean_ids = [tid for tid in gen_ids if tid != self._pad_token_id]
                 completions.append(clean_ids)
             decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
+            # Prompt tokens: slice from the RIGHT side of the padded input,
+            # keeping only the actual prompt tokens (last prompt_len positions).
+            prompt_start = padded_input_len - prompt_len
             chunk_outputs.append(HfBeamOutput(
-                prompt_token_ids=input_ids[p_idx, :prompt_len].tolist(),
+                prompt_token_ids=input_ids[p_idx, prompt_start:padded_input_len].tolist(),
                 response_token_ids=completions,
                 decoded_completions=decoded,
                 beam_width=beam_width,

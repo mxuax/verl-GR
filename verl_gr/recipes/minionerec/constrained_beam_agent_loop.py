@@ -327,12 +327,39 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
         val_beam_width = int(custom.get("val_beam_width", beam_width)) if isinstance(custom, dict) else beam_width
         n_beams = val_beam_width if is_validate else beam_width
         info_file = _get_constraint_info_file(self.rollout_config)
-        max_new_tokens = int(getattr(self.rollout_config, "response_length", 128) or 128)
+
+        # Training: 128 (original max_completion_length).  Validation: 256 (evaluate.sh).
+        train_max_new_tokens = 128
+        val_max_new_tokens = int(getattr(self.rollout_config, "response_length", 256) or 256)
+        max_new_tokens = val_max_new_tokens if is_validate else train_max_new_tokens
 
         unique_texts, group_sizes = self._extract_prompt_groups(prompts, rows_per_group=n_beams)
         n_unique = len(unique_texts)
         if n_unique == 0:
             return prompts
+
+        # Collect pre-tokenized prompt IDs (already truncated in __getitem__)
+        raw_prompt_ids_list = [
+            list(int(x) for x in ids) if hasattr(ids, "__iter__") else []
+            for ids in prompts.non_tensor_batch.get("raw_prompt_ids", [])
+        ]
+        # Get the first prompt_ids per unique group (same grouping as _extract_prompt_groups)
+        unique_prompt_ids: list[list[int]] = []
+        if raw_prompt_ids_list:
+            group_ids = None
+            for key in ("uid", "index"):
+                values = prompts.non_tensor_batch.get(key)
+                if values is not None and len(values) == len(raw_prompt_ids_list):
+                    group_ids = [str(v) for v in values]
+                    break
+            if group_ids is not None:
+                run_start = 0
+                while run_start < len(group_ids):
+                    unique_prompt_ids.append(raw_prompt_ids_list[run_start])
+                    run_end = run_start + 1
+                    while run_end < len(group_ids) and group_ids[run_end] == group_ids[run_start]:
+                        run_end += 1
+                    run_start = run_end
 
         meta_info = {
             "beam_width": beam_width,
@@ -343,6 +370,10 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
             "max_new_tokens": max_new_tokens,
             "validate": is_validate,
         }
+
+        # Pass pre-tokenized prompt IDs when available (avoids re-tokenization)
+        if unique_prompt_ids and len(unique_prompt_ids) == n_unique:
+            meta_info["prompt_token_ids"] = unique_prompt_ids
 
         # Call actor_rollout_wg via Ray (non-blocking I/O friendly — Ray RPC
         # releases the GIL so this does not stall the event loop).
