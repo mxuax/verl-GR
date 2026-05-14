@@ -199,13 +199,19 @@ class MiniOneRecDataset(Dataset):
         dataframes = [self._load_file(data_file) for data_file in self.data_files]
         source_dataframe = datasets.concatenate_datasets(dataframes)
         logger.info("MiniOneRec source dataset len: %s", len(source_dataframe))
+        print(f"[MiniOneRec] source dataset (CSV rows): {len(source_dataframe)}", flush=True)
 
         records = self._build_sid_records(source_dataframe)
         if self.include_alignment_tasks:
-            records.extend(self._build_title2sid_records())
-            records.extend(self._build_seq_title2sid_records(source_dataframe))
+            title2sid_records = self._build_title2sid_records()
+            seq_records = self._build_seq_title2sid_records(source_dataframe)
+            print(f"[MiniOneRec] title2sid+desc2sid records: {len(title2sid_records)}", flush=True)
+            print(f"[MiniOneRec] seq_title2sid records: {len(seq_records)}", flush=True)
+            records.extend(title2sid_records)
+            records.extend(seq_records)
 
         self.dataframe = datasets.Dataset.from_list(records)
+        print(f"[MiniOneRec] combined (before filter): {len(self.dataframe)}", flush=True)
         logger.info("MiniOneRec combined dataset len: %s", len(self.dataframe))
         if self.shuffle:
             self.dataframe = self.dataframe.shuffle(seed=self.seed)

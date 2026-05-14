@@ -59,7 +59,7 @@ export LEARNING_RATE=1e-5
 export SEQ_TITLE_SAMPLE=10000
 # 与 run_minionerec_grpo.sh 默认一致（未在 rl.sh 中单独写出）
 export ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-16}"
-export MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-64}"
+export MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-256}"
 export MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-2560}"
 export MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
 export ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-512}"
@@ -78,8 +78,10 @@ bash scripts/run_minionerec_grpo.sh \
   data.shuffle=true \
   data.seed=42 \
   trainer.val_before_train=true \
-  trainer.save_freq=50 \
-  trainer.test_freq=50 \
+  trainer.save_freq=165 \
+  trainer.test_freq=165 \
+  data.filter_overlong_prompts=false \
+  data.truncation=left \
   actor_rollout_ref.actor.kl_loss_coef=0.001 \
   actor_rollout_ref.actor.use_dynamic_bsz=true \
   actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
