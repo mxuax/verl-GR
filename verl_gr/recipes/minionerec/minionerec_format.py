@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import random
 from typing import Any
 
@@ -10,7 +9,8 @@ import numpy as np
 
 
 def parse_maybe_list(value: Any) -> list[Any]:
-    """Parse MiniOneRec CSV list fields without changing already parsed data."""
+    """Parse MiniOneRec CSV list fields — exact mirror of the original ``eval()``
+    pattern used in ``data.py`` (e.g. ``eval(row['history_item_sid'])``)."""
 
     if isinstance(value, list):
         return value
@@ -20,8 +20,8 @@ def parse_maybe_list(value: Any) -> list[Any]:
         return value.tolist()
     if isinstance(value, str):
         try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError):
+            parsed = eval(value)
+        except Exception:
             return [value]
         return parsed if isinstance(parsed, list) else [parsed]
     return [value]
