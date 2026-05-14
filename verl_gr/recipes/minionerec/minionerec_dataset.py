@@ -233,14 +233,19 @@ class MiniOneRecDataset(Dataset):
 
         title2sid: dict[str, str] = {}
         description2sid: dict[str, str] = {}
+        valid_items = 0
         for item_id, sids in indices.items():
             if item_id not in item_feat or len(sids) < 3:
                 continue
+            valid_items += 1
             combined_sid = str(sids[0]) + str(sids[1]) + str(sids[2])
             title = item_feat[item_id].get("title")
             description = maybe_parse_description(item_feat[item_id].get("description"))
             title2sid[title] = combined_sid
             description2sid[description] = combined_sid
+        print(f"[MiniOneRec] valid_items (in index & item_feat & len>=3): {valid_items}", flush=True)
+        print(f"[MiniOneRec] unique titles: {len(title2sid)}", flush=True)
+        print(f"[MiniOneRec] unique descriptions: {len(description2sid)}", flush=True)
 
         records: list[dict[str, Any]] = []
         for task, mapping in (("title2sid", title2sid), ("description2sid", description2sid)):
