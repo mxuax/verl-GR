@@ -237,8 +237,8 @@ class MiniOneRecDataset(Dataset):
             if item_id not in item_feat or len(sids) < 3:
                 continue
             combined_sid = str(sids[0]) + str(sids[1]) + str(sids[2])
-            title = str(item_feat[item_id].get("title", ""))
-            description = maybe_parse_description(item_feat[item_id].get("description", ""))
+            title = item_feat[item_id].get("title")
+            description = maybe_parse_description(item_feat[item_id].get("description"))
             title2sid[title] = combined_sid
             description2sid[description] = combined_sid
 

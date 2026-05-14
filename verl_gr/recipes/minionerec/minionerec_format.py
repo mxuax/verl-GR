@@ -65,16 +65,21 @@ def build_seq_title2sid_prompt(history_item_title: list[Any]) -> tuple[str, str]
     return formatted, history_key
 
 
-def maybe_parse_description(description: Any) -> str:
-    """Mirror the lenient description parsing used by RLTitle2SidDataset."""
+def maybe_parse_description(description: Any) -> Any:
+    """Mirror the lenient description parsing used by RLTitle2SidDataset.
+
+    The original code accesses ``item_feat[item_id]['description']`` directly
+    and only transforms list-format strings (``['...', ...]``).  All other
+    values — including ``None`` — are kept as-is.
+    """
 
     if isinstance(description, str) and description.startswith("['") and description.endswith("']"):
         try:
             desc_list = ast.literal_eval(description)
-            return str(desc_list[0]) if desc_list else description
+            return desc_list[0] if desc_list else description
         except (SyntaxError, ValueError):
             return description
-    return "" if description is None else str(description)
+    return description
 
 
 def sample_records(records: list[dict[str, Any]], sample: int, *, seed: int | None = None) -> list[dict[str, Any]]:
