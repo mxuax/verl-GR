@@ -17,10 +17,9 @@ data:
   max_prompt_length: 2560
   prompt_key: prompt
   shuffle: false
-  max_response_length: 64
-  filter_overlong_prompts: true
-  filter_overlong_prompts_workers: 16
-  truncation: error
+  max_response_length: 256
+  filter_overlong_prompts: false
+  truncation: left
   custom_cls:
     name: MiniOneRecDataset
     path: null
@@ -69,7 +68,7 @@ actor_rollout_ref:
     optim:
       lr: 1e-5
       lr_warmup_steps_ratio: 0.03
-      weight_decay: 0.1
+      weight_decay: 0.0
       clip_grad: 0.3
       lr_scheduler_type: cosine
     fsdp_config:
@@ -99,6 +98,7 @@ actor_rollout_ref:
       # Effective rollout requests per prompt = num_generations_per_prompt * beam_width.
       num_generations_per_prompt: 1
       beam_width: 16
+      val_beam_width: 50
       decode_mode_train: hf_constrained_beam_sample
       decode_mode_val: hf_constrained_beam_eval
       disable_cache_in_train: true
@@ -146,8 +146,8 @@ trainer:
   default_hdfs_dir: null
   logger: [tensorboard]
   remove_previous_ckpt_in_save: true
-  save_freq: 20
-  test_freq: 20
+  save_freq: 165
+  test_freq: 165
   total_epochs: 2
   nnodes: 1
   n_gpus_per_node: 8

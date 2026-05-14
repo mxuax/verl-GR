@@ -211,8 +211,6 @@ class MiniOneRecDataset(Dataset):
             self.dataframe = self.dataframe.shuffle(seed=self.seed)
         if self.max_samples > 0 and self.max_samples < len(self.dataframe):
             self.dataframe = self.dataframe.select(list(range(self.max_samples)))
-        if self.filter_overlong_prompts:
-            self.dataframe = self.maybe_filter_out_long_prompts(self.dataframe)
         logger.info("MiniOneRec processed dataset len: %s", len(self.dataframe))
 
     def _build_sid_records(self, dataframe: datasets.Dataset) -> list[dict[str, Any]]:
@@ -235,10 +233,8 @@ class MiniOneRecDataset(Dataset):
             combined_sid = str(sids[0]) + str(sids[1]) + str(sids[2])
             title = str(item_feat[item_id].get("title", ""))
             description = maybe_parse_description(item_feat[item_id].get("description", ""))
-            if title:
-                title2sid[title] = combined_sid
-            if description:
-                description2sid[description] = combined_sid
+            title2sid[title] = combined_sid
+            description2sid[description] = combined_sid
 
         records: list[dict[str, Any]] = []
         for task, mapping in (("title2sid", title2sid), ("description2sid", description2sid)):
@@ -260,8 +256,6 @@ class MiniOneRecDataset(Dataset):
             row = dict(row)
             history_item_title = parse_maybe_list(row.get("history_item_title"))
             target_sid = str(row.get("item_sid", "")).strip()
-            if not history_item_title or not target_sid:
-                continue
             is_duplicate = False
             if "history_item_id" in row:
                 history_item_id = parse_maybe_list(row.get("history_item_id"))
