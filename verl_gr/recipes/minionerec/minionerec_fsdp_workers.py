@@ -1,4 +1,4 @@
-"""MiniOneRec worker shim for constrained-beam rollout registration."""
+"""MiniOneRec worker shim — vLLM-free: all generation routed through HF model.generate()."""
 
 from __future__ import annotations
 
@@ -14,13 +14,53 @@ from verl_gr.workers.rollout.registration import register_constrained_beam_rollo
 
 
 class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
-    """Model-engine worker with local constrained-beam rollout registration."""
+    """FSDP worker that skips vLLM engine creation.
+
+    MiniOneRec routes all generation (train + val) through
+    HF ``model.generate()`` with FSDP ``summon_full_params``.
+    vLLM is never used, so we prevent the parent ``init_model``
+    from creating a local rollout engine and override
+    ``update_weights`` to be a no-op for the naive checkpoint
+    backend.
+    """
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        if self.config.rollout.name == "constrained_beam" and self.config.rollout.mode == "async":
+        if self.config.rollout.name == "constrained_beam":
             register_constrained_beam_rollout_class()
-        return super().init_model()
+
+        # self.role is a str (e.g. "actor_rollout_ref"), not a set.
+        # The parent init_model checks `"rollout" in self.role` via
+        # substring match.  Temporarily replace the substring so that
+        # the check fails and no vLLM engine is created.
+        saved_role: str = self.role
+        self.role = saved_role.replace("rollout", "no_rl")
+        try:
+            return super().init_model()
+        finally:
+            self.role = saved_role
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
+    async def update_weights(self, global_steps: int = None):
+        """Skip vLLM weight sync — MiniOneRec uses HF generate exclusively.
+
+        The naive checkpoint-engine backend calls this on every FSDP worker
+        after each actor update.  The original implementation resumes the
+        colocated vLLM engine, syncs weights, and re-sleeps it.  MiniOneRec
+        has no vLLM engine, so the naive path is a no-op.
+
+        .. note::
+           This override is only reached when
+           ``checkpoint_engine.backend == "naive"`` (the default).  Non-naive
+           backends would attempt to build a process group from
+           ``rollout_replicas`` inside ``CheckpointEngineManager`` before
+           dispatching, and would fail because ``_initialize_llm_servers``
+           sets ``rollout_replicas = []``.
+        """
+        # Naive backend: no vLLM engine → nothing to sync.
+        # (Non-naive backends don't reach here — they crash earlier inside
+        #  CheckpointEngineManager.update_weights when replicas=[].)
+        return
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def hf_constrained_beam_generate(self, prompts: list[str], meta_info: dict) -> dict:

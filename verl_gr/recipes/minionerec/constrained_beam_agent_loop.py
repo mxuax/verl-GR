@@ -209,9 +209,43 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
 
     agent_loop_workers_class = ray.remote(MiniOneRecConstrainedBeamAgentLoopWorker)
 
+    # ------------------------------------------------------------------
+    # vLLM-free init: MiniOneRec routes all generation through HF
+    # model.generate(), so vLLM engines are never needed.
+    # ------------------------------------------------------------------
+
+    async def _initialize_llm_servers(self):
+        """Skip vLLM engine creation — MiniOneRec uses HF generate exclusively.
+
+        .. warning::
+           This only works when ``checkpoint_engine.backend`` is ``"naive"``
+           (the default).  Non-naive backends require ``rollout_replicas`` to
+           build a process group for weight sync and will fail here.
+        """
+        self.server_handles = []
+        self.server_addresses = []
+        self.rollout_replicas = []
+
+    async def _init_global_load_balancer(self) -> None:
+        """Skip load balancer — never used by HF-only MiniOneRec path."""
+        self.global_load_balancer = None
+
+    async def _init_agent_loop_workers(self):
+        """Skip agent-loop workers — never dispatched by HF-only MiniOneRec path."""
+        self.agent_loop_workers = []
+
+    # ------------------------------------------------------------------
+
     @auto_await
     async def generate_sequences(self, prompts: DataProto) -> DataProto:
         if not self._should_route_to_hf(prompts):
+            if not self.agent_loop_workers:
+                raise RuntimeError(
+                    "MiniOneRec agent-loop workers are empty (vLLM disabled), "
+                    "but the current decode mode is not routed to HF. "
+                    "Set decode_mode_train/decode_mode_val to hf_constrained_beam_* "
+                    "in rollout.custom to use the HF-only path."
+                )
             return await super().generate_sequences(prompts)
         return await self._hf_generate_sequences(prompts)
 
@@ -232,13 +266,13 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
     def _should_route_to_hf(self, prompts: DataProto) -> bool:
         """Check whether the current request should use the HF branch.
 
-        HF routing only applies during *training*.  Validation requests still go
-        through the agent-loop legacy path (which already handles beam expansion
-        and constraint via the adapter).
+        Both training and validation are routed through HF when the
+        corresponding decode modes are set — MiniOneRec never needs vLLM.
         """
-        if bool(prompts.meta_info.get("validate", False)):
-            return False
-        decode_mode = self._resolve_hf_decode_mode(is_validate=False)
+        is_validate = bool(prompts.meta_info.get("validate", False))
+        decode_mode = self._resolve_hf_decode_mode(is_validate=is_validate)
+        if is_validate:
+            return decode_mode == "hf_constrained_beam_eval"
         return decode_mode == "hf_constrained_beam_sample"
 
     @staticmethod
