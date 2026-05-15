@@ -40,9 +40,6 @@ data:
   data_source_key: source
   reward_fn_key: source
 
-reward:
-  num_workers: 1
-
 actor_rollout_ref:
   hybrid_engine: true
 
