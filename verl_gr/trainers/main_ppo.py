@@ -153,6 +153,17 @@ def _inject_legacy_reward_placeholders(config) -> None:
 
 def _ensure_runtime_root_blocks(config) -> None:
     """Backfill root runtime blocks that base verl dereferences before TaskRunner."""
+    def merge_missing(base_path: str, value) -> None:
+        if isinstance(value, dict):
+            if base_path and OmegaConf.select(config, base_path) is None:
+                OmegaConf.update(config, base_path, {}, force_add=True)
+            for sub_key, sub_value in value.items():
+                sub_path = f"{base_path}.{sub_key}" if base_path else sub_key
+                merge_missing(sub_path, sub_value)
+            return
+        if OmegaConf.select(config, base_path) is None:
+            OmegaConf.update(config, base_path, value, force_add=True)
+
     placeholders = (
         (
             "transfer_queue",
@@ -219,8 +230,7 @@ def _ensure_runtime_root_blocks(config) -> None:
         ),
     )
     for key, value in placeholders:
-        if OmegaConf.select(config, key) is None:
-            OmegaConf.update(config, key, value, force_add=True)
+        merge_missing(key, value)
 
 
 def _build_main():

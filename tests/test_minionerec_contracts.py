@@ -187,6 +187,9 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "_normalize_strategy_targets" not in source
     assert "_merge_missing" not in source
     assert "_ensure_runtime_root_blocks(config)" in source
+    assert "def merge_missing(base_path: str, value) -> None:" in source
+    assert 'merge_missing(sub_path, sub_value)' in source
+    assert 'merge_missing(key, value)' in source
     assert "transfer_queue" in source
     assert "ray_kwargs" in source
     assert "global_profiler" in source
