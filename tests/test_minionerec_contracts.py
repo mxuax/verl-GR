@@ -203,6 +203,9 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"trainer",' in source
     assert '"reward",' in source
     assert '"distillation",' in source
+    assert '"enabled": False' in source
+    assert '"teacher_models"' in source
+    assert '"distillation_loss"' in source
 
 
 def test_run_script_explicitly_pins_ddp_backend_fields():
