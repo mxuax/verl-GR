@@ -180,8 +180,8 @@ echo "==================================="
   ++data.include_alignment_tasks=true \
   ++data.include_alignment_tasks_for_val=false \
   ++data.seq_title_sample="${SEQ_TITLE_SAMPLE:-10000}" \
-  ++custom_reward_function.name="compute_score" \
-  ++custom_reward_function.path="${MINIONEREC_REWARD_PATH}" \
+  ++reward.custom_reward_function.name="compute_score" \
+  ++reward.custom_reward_function.path="${MINIONEREC_REWARD_PATH}" \
   ++data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   ++data.max_prompt_length="${MAX_PROMPT_LENGTH:-2560}" \
   ++data.max_response_length="${MAX_RESPONSE_LENGTH:-64}" \

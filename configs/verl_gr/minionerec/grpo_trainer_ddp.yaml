@@ -40,6 +40,13 @@ data:
   data_source_key: source
   reward_fn_key: source
 
+reward:
+  # Keep MiniOneRec aligned with the FSDP config and the reward-loop schema.
+  num_workers: 1
+  custom_reward_function:
+    path: null
+    name: compute_score
+
 actor_rollout_ref:
   hybrid_engine: true
 

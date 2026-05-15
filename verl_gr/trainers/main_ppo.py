@@ -60,7 +60,9 @@ def _infer_legacy_task_name(config) -> str:
 
     custom_cls_name = config.data.get("custom_cls", {}).get("name", "")
     custom_cls_path = config.data.get("custom_cls", {}).get("path", "")
-    reward_path = config.get("custom_reward_function", {}).get("path", "")
+    reward_path = config.get("custom_reward_function", {}).get("path", "") or config.get("reward", {}).get(
+        "custom_reward_function", {}
+    ).get("path", "")
     if (
         "minionerec" in str(custom_cls_name).lower()
         or "minionerec" in str(custom_cls_path).lower()
@@ -179,6 +181,31 @@ def _build_main():
         # already uses the new format).
         from omegaconf import OmegaConf
         _legacy_placeholders = (
+            (
+                "reward",
+                {
+                    "num_workers": 8,
+                    "custom_reward_function": {"path": None, "name": "compute_score"},
+                    "reward_manager": {
+                        "source": "register",
+                        "name": "naive",
+                        "module": {"path": None, "name": "custom_reward_manager"},
+                    },
+                    "reward_model": {
+                        "enable": False,
+                        "enable_resource_pool": False,
+                        "n_gpus_per_node": 8,
+                        "nnodes": 0,
+                        "model_path": None,
+                        "rollout": {},
+                    },
+                    "sandbox_fusion": {
+                        "url": None,
+                        "max_concurrent": 64,
+                        "memory_limit_mb": 1024,
+                    },
+                },
+            ),
             ("reward_model", {
                 "num_workers": None, "reward_manager": None,
                 "reward_loop_source": None, "reward_loop_module_path": None,
@@ -187,6 +214,7 @@ def _build_main():
                 "nnodes": None, "model": {"path": None},
             }),
             ("custom_reward_function", {"path": None, "name": None}),
+            ("sandbox_fusion", {"url": None, "max_concurrent": None, "memory_limit_mb": None}),
         )
         for _key, _val in _legacy_placeholders:
             if OmegaConf.select(config, _key) is None:
