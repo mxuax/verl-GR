@@ -8,6 +8,7 @@ hydra:
     - pkg://verl.trainer.config
 
 defaults:
+  - model_engine: dp
   - /ppo_trainer
   - _self_
 
