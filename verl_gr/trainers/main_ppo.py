@@ -1,7 +1,6 @@
 """Task-aware PPO entrypoint for verl-gr recipes."""
 
 import os
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
@@ -9,7 +8,7 @@ from typing import Callable
 
 import hydra
 import ray
-from omegaconf import OmegaConf, open_dict
+from omegaconf import OmegaConf
 
 from verl.trainer.main_ppo import (
     TaskRunner as BaseTaskRunner,
@@ -28,17 +27,6 @@ from verl_gr.recipes.rankgrpo.rankgrpo_task import RankGRPOTask
 from verl_gr.trainers.rl_trainer import RLTrainer
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr"
-_PPO_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "verl" / "verl" / "trainer" / "config" / "_generated_ppo_trainer.yaml"
-_SAFE_ROOT_SCHEMA_KEYS = (
-    "global_profiler",
-    "transfer_queue",
-    "ray_kwargs",
-    "distillation",
-    "reward",
-    "reward_model",
-    "custom_reward_function",
-    "sandbox_fusion",
-)
 
 
 @dataclass(frozen=True)
@@ -107,40 +95,6 @@ def _select_task(config):
     except KeyError as exc:
         valid = ", ".join(sorted(TASK_REGISTRY))
         raise ValueError(f"Unknown verl-gr task '{task_name}'. Expected one of: {valid}") from exc
-
-
-def _ensure_config_defaults(config, base_path: str, defaults) -> None:
-    """Recursively add missing OmegaConf keys without overwriting user values."""
-    if not isinstance(defaults, Mapping):
-        return
-    for key, value in defaults.items():
-        path = f"{base_path}.{key}" if base_path else key
-        existing = OmegaConf.select(config, path)
-        if isinstance(value, Mapping):
-            if existing is None:
-                OmegaConf.update(config, path, {}, force_add=True)
-            _ensure_config_defaults(config, path, value)
-        elif existing is None:
-            OmegaConf.update(config, path, value, force_add=True)
-
-
-def _normalize_strategy_targets(config) -> None:
-    """Ensure Hydra `_target_` matches the requested backend strategy."""
-    ddp_actor_target = "verl_gr.workers.config.ddp_engine.DDPActorConfig"
-    ddp_engine_target = "verl_gr.workers.config.ddp_engine.DDPEngineConfig"
-
-    for role_path in ("actor_rollout_ref.actor", "actor_rollout_ref.ref"):
-        strategy = str(OmegaConf.select(config, f"{role_path}.strategy") or "").lower()
-        if strategy != "ddp":
-            continue
-
-        OmegaConf.update(config, f"{role_path}._target_", ddp_actor_target, force_add=True)
-        OmegaConf.update(config, f"{role_path}.engine_config._target_", ddp_engine_target, force_add=True)
-        OmegaConf.update(config, f"{role_path}.engine_config.strategy", "ddp", force_add=True)
-        with open_dict(config):
-            role_cfg = OmegaConf.select(config, role_path)
-            if role_cfg is not None and "fsdp_config" in role_cfg:
-                del role_cfg["fsdp_config"]
 
 
 def _build_main():
@@ -216,18 +170,6 @@ def _build_main():
         task_impl = _select_task(config)
         task_impl.sanitize_fsdp2_wrap_policy(config)
         auto_set_device(config)
-
-        # MiniOneRec DDP config composes from a flattened trainer config and may
-        # miss root-level fields that base verl's run_ppo() assumes exist.
-        # Load the generated PPO schema and recursively add only missing keys so
-        # user overrides and task-specific settings always win.
-        base_schema = OmegaConf.load(_PPO_SCHEMA_PATH)
-        base_schema_dict = OmegaConf.to_container(base_schema, resolve=False)
-        for root_key in _SAFE_ROOT_SCHEMA_KEYS:
-            if root_key in base_schema_dict:
-                _ensure_config_defaults(config, root_key, base_schema_dict[root_key])
-        _normalize_strategy_targets(config)
-
         config = migrate_legacy_reward_impl(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
 

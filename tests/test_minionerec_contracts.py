@@ -170,6 +170,22 @@ def test_yaml_uses_hf_decode_modes():
     assert "hf_constrained_beam_eval" in source
 
 
+def test_ddp_yaml_uses_component_defaults_not_generated_schema():
+    source = _read_text("configs/verl_gr/minionerec/grpo_trainer_ddp.yaml")
+    assert "/_generated_ppo_trainer" not in source
+    assert "actor@actor_rollout_ref.actor: actor" in source
+    assert "ref@actor_rollout_ref.ref: ref" in source
+    assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in source
+    assert "_target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in source
+
+
+def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
+    source = _read_text("verl_gr/trainers/main_ppo.py")
+    assert "_generated_ppo_trainer" not in source
+    assert "_ensure_config_defaults" not in source
+    assert "_normalize_strategy_targets" not in source
+
+
 def test_openonerec_yaml_has_stage2_decode_mode():
     source = _read_text("configs/verl_gr/openonerec/grpo_trainer.yaml")
     assert "stage2_decode_mode: vllm_native_beam" in source

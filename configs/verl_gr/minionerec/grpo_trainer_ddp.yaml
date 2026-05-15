@@ -3,17 +3,26 @@
 # Uses PyTorch DistributedDataParallel instead of FSDP for faster
 # training on small models.
 #
-# Uses /_generated_ppo_trainer (flat yaml, no nested defaults) instead
-# of /ppo_trainer because Hydra cannot resolve ${model_engine}*
-# interpolations when a composition config is included as a defaults
-# entry from a subdirectory config.
+# Compose from concrete component configs instead of the generated flat
+# trainer schema. This keeps actor/ref nodes unstructured until our DDP
+# overrides apply, avoiding accidental fallback to FSDP targets.
 
 hydra:
   searchpath:
     - pkg://verl.trainer.config
 
 defaults:
-  - /_generated_ppo_trainer
+  - actor@actor_rollout_ref.actor: actor
+  - data@data: legacy_data
+  - ref@actor_rollout_ref.ref: ref
+  - rollout@actor_rollout_ref.rollout: rollout
+  - model@actor_rollout_ref.model: hf_model
+  - critic@critic: critic
+  - model@critic.model: hf_model
+  - /legacy_reward_impl
+  - reward@reward: reward
+  - algorithm@algorithm.rollout_correction: rollout_correction
+  - distillation@distillation: distillation
   - _self_
 
 task:
@@ -49,6 +58,7 @@ reward:
 
 actor_rollout_ref:
   hybrid_engine: true
+  nccl_timeout: 600
 
   ref:
     _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
@@ -138,14 +148,33 @@ actor_rollout_ref:
       impl_backend: torch
 
 algorithm:
+  _target_: verl.trainer.config.AlgoConfig
+  gamma: 1.0
+  lam: 1.0
   adv_estimator: grpo
   norm_adv_by_std_in_grpo: true
   use_kl_in_reward: false
+  kl_penalty: kl
+  kl_ctrl:
+    _target_: verl.trainer.config.KLControlConfig
+    type: fixed
+    kl_coef: 0.001
+    horizon: 10000
+    target_kl: 0.1
+  use_pf_ppo: false
+  pf_ppo:
+    reweight_method: pow
+    weight_pow: 2.0
 
 trainer:
+  balance_batch: true
   project_name: MiniOneRec_RL
   experiment_name: minionerec_grpo_ddp
+  total_training_steps: null
   val_before_train: true
+  log_val_generations: 0
+  rollout_data_dir: null
+  validation_data_dir: null
   best_ckpt_metric: val-aux/*/hr@20/mean
   default_hdfs_dir: null
   logger: [tensorboard]
@@ -155,16 +184,64 @@ trainer:
   total_epochs: 2
   nnodes: 1
   n_gpus_per_node: 8
+  esi_redundant_time: 0
+  resume_mode: auto
+  resume_from_path: null
+  val_only: false
+  critic_warmup: 0
+  del_local_ckpt_after_load: false
+  default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  max_actor_ckpt_to_keep: null
+  max_critic_ckpt_to_keep: null
+  ray_wait_register_center_timeout: 300
+  device: cuda
 
 critic:
   enable: false
 
 global_profiler:
+  _target_: verl.utils.profiler.ProfilerConfig
   tool: null
   steps: null
   profile_continuous_steps: false
   save_path: outputs/profile/minionerec
+  global_tool_config:
+    nsys:
+      _target_: verl.utils.profiler.config.NsightToolConfig
+      discrete: false
+      controller_nsight_options:
+        trace: cuda,nvtx,cublas,ucx
+        cuda-memory-usage: "true"
+        cuda-graph-trace: graph
+      worker_nsight_options:
+        trace: cuda,nvtx,cublas,ucx
+        cuda-memory-usage: "true"
+        cuda-graph-trace: graph
+        capture-range: cudaProfilerApi
+        capture-range-end: null
+        kill: none
+    torch_memory:
+      trace_alloc_max_entries: 100000
+      stack_depth: 32
+      context: all
+      stacks: all
+      kw_args: {}
+    precision_debugger:
+      _target_: verl.utils.profiler.config.PrecisionDebuggerToolConfig
+      config_path: null
+      steps: null
+      stages: null
+      strict: false
 
-ray_init:
-  num_cpus: null
+transfer_queue:
+  enable: false
+  backend:
+    storage_backend: SimpleStorage
+    SimpleStorage:
+      total_storage_size: 100000
+      num_data_storage_units: 8
+
+ray_kwargs:
+  ray_init:
+    num_cpus: null
   timeline_json_file: null
