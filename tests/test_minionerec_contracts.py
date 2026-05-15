@@ -178,10 +178,9 @@ def test_ddp_yaml_uses_component_defaults_not_generated_schema():
     assert "critic@critic: dp_critic" in source
     assert "sampler:" in source
     assert "reward_model:" in source
-    assert "actor:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in source
-    assert "actor:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig\n    strategy: ddp" in source
-    assert "ref:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in source
-    assert "engine_config:\n      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in source
+    assert "actor:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" not in source
+    assert "ref:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" not in source
+    assert "engine_config:\n      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" not in source
 
 
 def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
@@ -194,6 +193,9 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "def merge_missing(base_path: str, value) -> None:" in source
     assert 'merge_missing(sub_path, sub_value)' in source
     assert 'merge_missing(key, value)' in source
+    assert "def _strategy_debug_snapshot(config, role_name: str) -> dict:" in source
+    assert 'print(f"[verl-gr] strategy-signals[{stage}] {snapshot}")' in source
+    assert "Missing backend strategy for" in source
     assert "transfer_queue" in source
     assert "ray_kwargs" in source
     assert "global_profiler" in source
@@ -227,7 +229,9 @@ def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
     source = _read_text("verl_gr/recipes/task_runtime.py")
     assert "def _infer_role_strategy(" in source
     assert "def _ensure_role_strategy(" in source
+    assert "def _strategy_debug_snapshot(role_name: str, role_cfg) -> dict[str, Any]:" in source
     assert "actor_strategy = self._ensure_role_strategy(config, \"actor\")" in source
+    assert "actor_rollout_ref.actor signals=" in source
     assert "config.actor_rollout_ref.actor.strategy in {\"fsdp\", \"fsdp2\", \"ddp\"}" not in source
 
 

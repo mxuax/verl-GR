@@ -40,6 +40,30 @@ class RecipeTaskRuntime:
         self._rollout_counts_expanded = False
 
     @staticmethod
+    def _cfg_keys(node) -> list[str]:
+        if node is None or not hasattr(node, "keys"):
+            return []
+        try:
+            return sorted(str(key) for key in node.keys())
+        except Exception:
+            return []
+
+    @staticmethod
+    def _strategy_debug_snapshot(role_name: str, role_cfg) -> dict[str, Any]:
+        engine_cfg = None
+        if role_cfg is not None:
+            engine_cfg = role_cfg.get("engine_config") or role_cfg.get("engine") or {}
+        return {
+            "role": role_name,
+            "role_target": None if role_cfg is None else role_cfg.get("_target_", None),
+            "role_strategy": None if role_cfg is None else role_cfg.get("strategy", None),
+            "engine_target": None if not engine_cfg else engine_cfg.get("_target_", None),
+            "engine_strategy": None if not engine_cfg else engine_cfg.get("strategy", None),
+            "role_keys": RecipeTaskRuntime._cfg_keys(role_cfg),
+            "engine_keys": RecipeTaskRuntime._cfg_keys(engine_cfg),
+        }
+
+    @staticmethod
     def _normalize_layer_wrap_value(value):
         if isinstance(value, str):
             return [value]
@@ -196,7 +220,11 @@ class RecipeTaskRuntime:
             actor_rollout_cls = self.get_actor_rollout_ref_worker(config)
             critic_worker = TrainingWorker
         else:
-            raise NotImplementedError(f"Unknown strategy: {actor_strategy or '<missing>'}")
+            snapshot = self._strategy_debug_snapshot("actor", config.actor_rollout_ref.get("actor"))
+            raise NotImplementedError(
+                f"Unknown strategy: {actor_strategy or '<missing>'}. "
+                f"actor_rollout_ref.actor signals={snapshot}"
+            )
 
         return {
             "tokenizer": tokenizer,

@@ -151,6 +151,53 @@ def _inject_legacy_reward_placeholders(config) -> None:
             OmegaConf.update(config, key, value, force_add=True)
 
 
+def _cfg_get(node, key: str, default=None):
+    if node is None:
+        return default
+    if hasattr(node, "get"):
+        return node.get(key, default)
+    return getattr(node, key, default)
+
+
+def _cfg_keys(node) -> list[str]:
+    if node is None:
+        return []
+    if hasattr(node, "keys"):
+        try:
+            return sorted(str(key) for key in node.keys())
+        except Exception:
+            return []
+    return []
+
+
+def _strategy_debug_snapshot(config, role_name: str) -> dict:
+    actor_rollout_ref = _cfg_get(config, "actor_rollout_ref")
+    role_cfg = _cfg_get(actor_rollout_ref, role_name)
+    engine_cfg = _cfg_get(role_cfg, "engine_config") or _cfg_get(role_cfg, "engine")
+    return {
+        "role": role_name,
+        "role_path": f"actor_rollout_ref.{role_name}",
+        "role_target": _cfg_get(role_cfg, "_target_"),
+        "role_strategy": _cfg_get(role_cfg, "strategy"),
+        "engine_target": _cfg_get(engine_cfg, "_target_"),
+        "engine_strategy": _cfg_get(engine_cfg, "strategy"),
+        "role_keys": _cfg_keys(role_cfg),
+        "engine_keys": _cfg_keys(engine_cfg),
+    }
+
+
+def _validate_strategy_signals(config, task_impl, role_name: str, stage: str) -> str:
+    strategy = task_impl._ensure_role_strategy(config, role_name)
+    snapshot = _strategy_debug_snapshot(config, role_name)
+    print(f"[verl-gr] strategy-signals[{stage}] {snapshot}")
+    if not strategy:
+        raise ValueError(
+            f"Missing backend strategy for {snapshot['role_path']} at stage '{stage}'. "
+            f"Signals={snapshot}"
+        )
+    return strategy
+
+
 def _ensure_runtime_root_blocks(config) -> None:
     """Backfill root runtime blocks that base verl dereferences before TaskRunner."""
     def merge_missing(base_path: str, value) -> None:
@@ -242,6 +289,8 @@ def _build_main():
         def run(self, config):
             task_impl = _select_task(config)
             task_impl.sanitize_fsdp2_wrap_policy(config)
+            _validate_strategy_signals(config, task_impl, "actor", "task_runner_pre_prepare")
+            _validate_strategy_signals(config, task_impl, "ref", "task_runner_pre_prepare")
             pprint(OmegaConf.to_container(config, resolve=False))
             prepared = task_impl.prepare(config)
             tokenizer = prepared["tokenizer"]
@@ -309,6 +358,8 @@ def _build_main():
         _inject_legacy_reward_placeholders(config)
         config = migrate_legacy_reward_impl(config)
         _ensure_runtime_root_blocks(config)
+        _validate_strategy_signals(config, task_impl, "actor", "driver_pre_base_run_ppo")
+        _validate_strategy_signals(config, task_impl, "ref", "driver_pre_base_run_ppo")
         base_run_ppo(config, task_runner_class=TaskRunner)
 
     @hydra.main(config_path=str(_CONFIG_ROOT), config_name="openonerec/grpo_trainer", version_base=None)

@@ -124,21 +124,15 @@ actor_rollout_ref:
   nccl_timeout: 600
 
   ref:
-    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
-    strategy: ddp
     entropy_from_logits_with_chunking: true
     entropy_checkpointing: false
     engine_config:
-      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig
-      strategy: ddp
       forward_only: true
       model_dtype: bf16
       use_torch_compile: true
       seed: 42
 
   actor:
-    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
-    strategy: ddp
     entropy_from_logits_with_chunking: true
     entropy_checkpointing: true
     use_dynamic_bsz: true
@@ -151,8 +145,6 @@ actor_rollout_ref:
     policy_loss:
       loss_mode: minionerec_reinforce
     engine_config:
-      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig
-      strategy: ddp
       model_dtype: bf16
       use_torch_compile: true
       seed: 42
