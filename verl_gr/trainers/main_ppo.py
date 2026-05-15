@@ -230,6 +230,39 @@ def _inject_runtime_root_placeholders(config) -> None:
                 },
             },
         ),
+        (
+            "algorithm",
+            {
+                "_target_": "verl.trainer.config.AlgoConfig",
+                "gamma": 1.0,
+                "lam": 1.0,
+                "adv_estimator": "grpo",
+                "norm_adv_by_std_in_grpo": True,
+                "use_kl_in_reward": False,
+                "kl_penalty": "kl",
+                "kl_ctrl": {
+                    "_target_": "verl.trainer.config.KLControlConfig",
+                    "type": "fixed",
+                    "kl_coef": 0.001,
+                    "horizon": 10000,
+                    "target_kl": 0.1,
+                },
+                "use_pf_ppo": False,
+                "pf_ppo": {
+                    "reweight_method": "pow",
+                    "weight_pow": 2.0,
+                },
+                "rollout_correction": {
+                    "rollout_is": None,
+                    "rollout_is_threshold": 2.0,
+                    "rollout_rs": None,
+                    "rollout_rs_threshold": None,
+                    "bypass_mode": False,
+                    "loss_type": "ppo_clip",
+                    "rollout_is_batch_normalize": False,
+                },
+            },
+        ),
     )
     for key, value in placeholders:
         _merge_missing(config, key, value)
