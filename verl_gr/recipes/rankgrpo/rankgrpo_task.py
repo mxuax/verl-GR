@@ -31,14 +31,15 @@ class RankGRPOTask(RecipeTaskRuntime):
             force_pad_to_eos=rank_cfg.get("force_pad_to_eos", True),
         )
 
-        if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2", "megatron", "ddp"}:
-            if config.actor_rollout_ref.actor.strategy == "ddp":
+        actor_strategy = self._ensure_role_strategy(config, "actor")
+        if actor_strategy in {"fsdp", "fsdp2", "megatron", "ddp"}:
+            if actor_strategy == "ddp":
                 import verl_gr.workers.engine.ddp  # noqa: F401
             ray_worker_group_cls = RayWorkerGroup
             actor_rollout_cls = ActorRolloutRefWorker
             critic_worker = TrainingWorker
         else:
-            raise NotImplementedError(f"Unknown strategy: {config.actor_rollout_ref.actor.strategy}")
+            raise NotImplementedError(f"Unknown strategy: {actor_strategy or '<missing>'}")
 
         return {
             "tokenizer": built["tokenizer"],

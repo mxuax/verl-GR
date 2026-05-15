@@ -186,6 +186,20 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "_normalize_strategy_targets" not in source
 
 
+def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
+    source = _read_text("verl_gr/recipes/task_runtime.py")
+    assert "def _infer_role_strategy(" in source
+    assert "def _ensure_role_strategy(" in source
+    assert "actor_strategy = self._ensure_role_strategy(config, \"actor\")" in source
+    assert "config.actor_rollout_ref.actor.strategy in {\"fsdp\", \"fsdp2\", \"ddp\"}" not in source
+
+
+def test_minionerec_worker_does_not_require_direct_actor_strategy_attr():
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_fsdp_workers.py")
+    assert "actor_strategy =" in source
+    assert "self.config.actor.strategy not in" not in source
+
+
 def test_openonerec_yaml_has_stage2_decode_mode():
     source = _read_text("configs/verl_gr/openonerec/grpo_trainer.yaml")
     assert "stage2_decode_mode: vllm_native_beam" in source
