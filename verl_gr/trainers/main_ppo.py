@@ -186,6 +186,19 @@ def _strategy_debug_snapshot(config, role_name: str) -> dict:
     }
 
 
+def _model_debug_snapshot(config) -> dict:
+    actor_rollout_ref = _cfg_get(config, "actor_rollout_ref")
+    model_cfg = _cfg_get(actor_rollout_ref, "model")
+    return {
+        "path": "actor_rollout_ref.model",
+        "model_target": _cfg_get(model_cfg, "_target_"),
+        "model_path": _cfg_get(model_cfg, "path"),
+        "tokenizer_path": _cfg_get(model_cfg, "tokenizer_path"),
+        "use_remove_padding": _cfg_get(model_cfg, "use_remove_padding"),
+        "model_keys": _cfg_keys(model_cfg),
+    }
+
+
 def _validate_strategy_signals(config, task_impl, role_name: str, stage: str) -> str:
     strategy = task_impl._ensure_role_strategy(config, role_name)
     snapshot = _strategy_debug_snapshot(config, role_name)
@@ -196,6 +209,13 @@ def _validate_strategy_signals(config, task_impl, role_name: str, stage: str) ->
             f"Signals={snapshot}"
         )
     return strategy
+
+
+def _validate_model_signal(config, stage: str) -> None:
+    snapshot = _model_debug_snapshot(config)
+    print(f"[verl-gr] model-signals[{stage}] {snapshot}")
+    if not snapshot["model_target"]:
+        raise ValueError(f"Missing model _target_ at stage '{stage}'. Signals={snapshot}")
 
 
 def _ensure_runtime_root_blocks(config) -> None:
@@ -545,6 +565,7 @@ def _build_main():
             task_impl.sanitize_fsdp2_wrap_policy(config)
             _validate_strategy_signals(config, task_impl, "actor", "task_runner_pre_prepare")
             _validate_strategy_signals(config, task_impl, "ref", "task_runner_pre_prepare")
+            _validate_model_signal(config, "task_runner_pre_prepare")
             pprint(OmegaConf.to_container(config, resolve=False))
             prepared = task_impl.prepare(config)
             tokenizer = prepared["tokenizer"]
@@ -614,6 +635,7 @@ def _build_main():
         _ensure_runtime_root_blocks(config)
         _validate_strategy_signals(config, task_impl, "actor", "driver_pre_base_run_ppo")
         _validate_strategy_signals(config, task_impl, "ref", "driver_pre_base_run_ppo")
+        _validate_model_signal(config, "driver_pre_base_run_ppo")
         base_run_ppo(config, task_runner_class=TaskRunner)
 
     @hydra.main(config_path=str(_CONFIG_ROOT), config_name="openonerec/grpo_trainer", version_base=None)

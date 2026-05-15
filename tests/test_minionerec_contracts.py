@@ -175,11 +175,14 @@ def test_ddp_yaml_uses_component_defaults_not_generated_schema():
     assert "/_generated_ppo_trainer" not in source
     assert "actor@actor_rollout_ref.actor: minionerec_ddp_actor" in source
     assert "ref@actor_rollout_ref.ref: minionerec_ddp_ref" in source
+    assert "model@actor_rollout_ref.model: minionerec_hf_model" in source
     assert "critic@critic: dp_critic" in source
     assert "sampler:" in source
     assert "reward_model:" in source
     assert "  actor:\n" not in source
     assert "  ref:\n" not in source
+    assert "  model:\n    enable_activation_offload: true" not in source
+    assert "  model:\n    enable_gradient_checkpointing: true" not in source
 
 
 def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
@@ -194,6 +197,8 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert 'merge_missing(key, value)' in source
     assert "def _strategy_debug_snapshot(config, role_name: str) -> dict:" in source
     assert 'print(f"[verl-gr] strategy-signals[{stage}] {snapshot}")' in source
+    assert "def _model_debug_snapshot(config) -> dict:" in source
+    assert 'print(f"[verl-gr] model-signals[{stage}] {snapshot}")' in source
     assert "Missing backend strategy for" in source
     assert "transfer_queue" in source
     assert "ray_kwargs" in source
@@ -219,6 +224,7 @@ def test_run_script_explicitly_pins_ddp_backend_fields():
     assert '++actor_rollout_ref.actor.strategy=ddp' in source
     assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' in source
     assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' in source
+    assert '++actor_rollout_ref.model._target_="verl.workers.config.HFModelConfig"' in source
     assert '++actor_rollout_ref.ref.strategy=ddp' in source
     assert '++actor_rollout_ref.ref.engine_config.forward_only=true' in source
     assert 'CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"' in source
@@ -230,6 +236,7 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     engine_source = _read_text("configs/verl_gr/engine/ddp.yaml")
     minionerec_actor_source = _read_text("configs/verl_gr/actor/minionerec_ddp_actor.yaml")
     minionerec_ref_source = _read_text("configs/verl_gr/ref/minionerec_ddp_ref.yaml")
+    minionerec_model_source = _read_text("configs/verl_gr/model/minionerec_hf_model.yaml")
 
     assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in actor_source
     assert "strategy: ddp" in actor_source
@@ -242,6 +249,8 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     assert "loss_mode: minionerec_reinforce" in minionerec_actor_source
     assert "defaults:\n  - ddp_ref" in minionerec_ref_source
     assert "forward_only: true" in minionerec_ref_source
+    assert "defaults:\n  - hf_model" in minionerec_model_source
+    assert "enable_gradient_checkpointing: true" in minionerec_model_source
 
 
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():

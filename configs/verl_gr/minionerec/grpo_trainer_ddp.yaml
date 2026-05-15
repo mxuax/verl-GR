@@ -16,7 +16,7 @@ defaults:
   - /data@data: legacy_data
   - /ref@actor_rollout_ref.ref: minionerec_ddp_ref
   - /rollout@actor_rollout_ref.rollout: rollout
-  - /model@actor_rollout_ref.model: hf_model
+  - /model@actor_rollout_ref.model: minionerec_hf_model
   - /critic@critic: dp_critic
   - /model@critic.model: hf_model
   - /legacy_reward_impl
@@ -161,14 +161,6 @@ actor_rollout_ref:
     engine_kwargs:
       vllm:
         max_logprobs: 320
-
-  model:
-    enable_activation_offload: true
-    enable_gradient_checkpointing: true
-    use_remove_padding: true
-    use_fused_kernels: false
-    fused_kernel_options:
-      impl_backend: torch
 
 algorithm:
   _target_: verl.trainer.config.AlgoConfig
