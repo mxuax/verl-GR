@@ -11,6 +11,7 @@ Provides:
 from __future__ import annotations
 
 import logging
+import contextlib
 from collections import defaultdict
 from typing import Any
 
@@ -146,7 +147,12 @@ class HfConstrainedBeamGenerator:
             eos_token_id=self._eos_token_id,
         )
 
-        with torch.no_grad():
+        param_dtype = next(model.parameters()).dtype
+        autocast_ctx = contextlib.nullcontext()
+        if device.type in {"cuda", "npu"} and param_dtype in {torch.float16, torch.bfloat16}:
+            autocast_ctx = torch.autocast(device_type=device.type, dtype=param_dtype)
+
+        with torch.no_grad(), autocast_ctx:
             output = model.generate(
                 input_ids=input_ids,
                 attention_mask=attn_mask,
