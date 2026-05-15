@@ -114,6 +114,21 @@ def _ensure_config_defaults(config, base_path: str, defaults) -> None:
             OmegaConf.update(config, path, value, force_add=True)
 
 
+def _normalize_strategy_targets(config) -> None:
+    """Ensure Hydra `_target_` matches the requested backend strategy."""
+    ddp_actor_target = "verl_gr.workers.config.ddp_engine.DDPActorConfig"
+    ddp_engine_target = "verl_gr.workers.config.ddp_engine.DDPEngineConfig"
+
+    for role_path in ("actor_rollout_ref.actor", "actor_rollout_ref.ref"):
+        strategy = str(OmegaConf.select(config, f"{role_path}.strategy") or "").lower()
+        if strategy != "ddp":
+            continue
+
+        OmegaConf.update(config, f"{role_path}._target_", ddp_actor_target, force_add=True)
+        OmegaConf.update(config, f"{role_path}.engine_config._target_", ddp_engine_target, force_add=True)
+        OmegaConf.update(config, f"{role_path}.engine_config.strategy", "ddp", force_add=True)
+
+
 def _build_main():
     @ray.remote(num_cpus=1)
     class TaskRunner(BaseTaskRunner):
@@ -195,6 +210,7 @@ def _build_main():
         # user overrides and task-specific settings always win.
         base_schema = OmegaConf.load(_PPO_SCHEMA_PATH)
         _ensure_config_defaults(config, "", OmegaConf.to_container(base_schema, resolve=False))
+        _normalize_strategy_targets(config)
 
         config = migrate_legacy_reward_impl(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
