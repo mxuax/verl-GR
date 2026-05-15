@@ -200,13 +200,13 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "global_profiler" in source
 
 
-def test_run_script_does_not_duplicate_ddp_backend_fields():
+def test_run_script_explicitly_pins_ddp_backend_fields():
     source = _read_text("scripts/run_minionerec_grpo.sh")
-    assert '++actor_rollout_ref.actor.strategy=ddp' not in source
-    assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' not in source
-    assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' not in source
-    assert '++actor_rollout_ref.ref.strategy=ddp' not in source
-    assert '++actor_rollout_ref.ref.engine_config.forward_only=true' not in source
+    assert '++actor_rollout_ref.actor.strategy=ddp' in source
+    assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' in source
+    assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' in source
+    assert '++actor_rollout_ref.ref.strategy=ddp' in source
+    assert '++actor_rollout_ref.ref.engine_config.forward_only=true' in source
     assert 'CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"' in source
 
 
