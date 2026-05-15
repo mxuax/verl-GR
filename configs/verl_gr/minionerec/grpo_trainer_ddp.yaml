@@ -13,8 +13,8 @@ hydra:
     - pkg://verl.trainer.config
 
 defaults:
-  # === Inlined from ppo_trainer.yaml (all absolute to avoid subdir package issues) ===
-  - model_engine: dp
+  # === Inlined from ppo_trainer.yaml (all absolute; model_engine removed — not needed since
+  #     all ${model_engine}_* interpolations are hardcoded to dp_*) ===
   - /actor@actor_rollout_ref.actor: dp_actor
   - /data@data: legacy_data
   - /ref@actor_rollout_ref.ref: dp_ref
