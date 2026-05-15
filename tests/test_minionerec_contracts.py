@@ -280,6 +280,12 @@ def test_ddp_backend_registration_is_importable_via_model_external_lib():
     assert 'backend=["ddp"]' in transformer_impl
 
 
+def test_ddp_engine_normalizes_optimizer_config_to_fsdp_dataclass():
+    source = _read_text("verl_gr/workers/engine/ddp/transformer_impl.py")
+    assert "omega_conf_to_dataclass(optimizer_config, dataclass_type=FSDPOptimizerConfig)" in source
+    assert "isinstance(optimizer_config, FSDPOptimizerConfig)" in source
+
+
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
     source = _read_text("verl_gr/recipes/task_runtime.py")
     assert "def _infer_role_strategy(" in source

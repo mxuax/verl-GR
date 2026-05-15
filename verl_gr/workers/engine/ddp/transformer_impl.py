@@ -19,6 +19,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import verl.utils.torch_functional as verl_F
 from verl.trainer.config import CheckpointConfig
+from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.device import get_device_id, get_device_name
 from verl.workers.config import HFModelConfig, FSDPOptimizerConfig
 from verl.workers.engine.base import BaseEngine, BaseEngineCtx, EngineRegistry
@@ -105,7 +106,11 @@ class DDPEngine(FSDPEngine):
 
         self.model_config = model_config
         self.engine_config = engine_config
-        self.optimizer_config = optimizer_config
+        self.optimizer_config = (
+            optimizer_config
+            if isinstance(optimizer_config, FSDPOptimizerConfig)
+            else omega_conf_to_dataclass(optimizer_config, dataclass_type=FSDPOptimizerConfig)
+        )
         self.checkpoint_config = checkpoint_config
 
         self.mode = None
