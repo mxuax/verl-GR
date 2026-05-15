@@ -97,6 +97,19 @@ def _select_task(config):
         raise ValueError(f"Unknown verl-gr task '{task_name}'. Expected one of: {valid}") from exc
 
 
+def _ensure_config_defaults(config, base_path: str, defaults: dict) -> None:
+    """Recursively add missing OmegaConf keys without overwriting user values."""
+    for key, value in defaults.items():
+        path = f"{base_path}.{key}" if base_path else key
+        existing = OmegaConf.select(config, path)
+        if isinstance(value, dict):
+            if existing is None:
+                OmegaConf.update(config, path, {}, force_add=True)
+            _ensure_config_defaults(config, path, value)
+        elif existing is None:
+            OmegaConf.update(config, path, value, force_add=True)
+
+
 def _build_main():
     @ray.remote(num_cpus=1)
     class TaskRunner(BaseTaskRunner):
@@ -211,14 +224,37 @@ def _build_main():
                 "reward_loop_source": None, "reward_loop_module_path": None,
                 "reward_loop_class_name": None, "enable": None,
                 "enable_resource_pool": None, "n_gpus_per_node": None,
-                "nnodes": None, "model": {"path": None},
+                "nnodes": None, "reward_kwargs": None,
+                "model": {"path": None, "external_lib": None, "trust_remote_code": None},
+                "rollout": {
+                    "name": None,
+                    "dtype": None,
+                    "gpu_memory_utilization": None,
+                    "enforce_eager": None,
+                    "cudagraph_capture_sizes": None,
+                    "free_cache_engine": None,
+                    "data_parallel_size": None,
+                    "expert_parallel_size": None,
+                    "tensor_model_parallel_size": None,
+                    "max_num_batched_tokens": None,
+                    "max_model_len": None,
+                    "max_num_seqs": None,
+                    "load_format": None,
+                    "engine_kwargs": None,
+                    "limit_images": None,
+                    "enable_chunked_prefill": None,
+                    "enable_prefix_caching": None,
+                    "disable_log_stats": None,
+                    "skip_tokenizer_init": None,
+                    "prompt_length": None,
+                    "response_length": None,
+                },
             }),
             ("custom_reward_function", {"path": None, "name": None}),
             ("sandbox_fusion", {"url": None, "max_concurrent": None, "memory_limit_mb": None}),
         )
         for _key, _val in _legacy_placeholders:
-            if OmegaConf.select(config, _key) is None:
-                OmegaConf.update(config, _key, _val, force_add=True)
+            _ensure_config_defaults(config, _key, _val)
 
         config = migrate_legacy_reward_impl(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
