@@ -532,7 +532,16 @@ def _ensure_runtime_root_blocks(config) -> None:
                 "num_workers": 1,
                 "launch_reward_fn_async": False,
                 "reward_type": "function",
-                "reward_manager": "naive",
+                "reward_manager": {
+                    "_target_": "verl.workers.config.reward_model.RewardManagerConfig",
+                    "source": "register",
+                    "name": "naive",
+                    "module": {
+                        "_target_": "verl.trainer.config.config.ModuleConfig",
+                        "path": None,
+                        "name": "custom_reward_manager",
+                    },
+                },
                 "reward_model": {
                     "enable": False,
                     "enable_resource_pool": False,

@@ -179,6 +179,9 @@ def test_ddp_yaml_uses_component_defaults_not_generated_schema():
     assert "critic@critic: dp_critic" in source
     assert "sampler:" in source
     assert "reward_model:" in source
+    assert "reward_manager:" in source
+    assert "source: register" in source
+    assert "name: naive" in source
     assert "  actor:\n" not in source
     assert "  ref:\n" not in source
     assert "  model:\n    enable_activation_offload: true" not in source
@@ -221,6 +224,7 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"algorithm",' in source
     assert '"trainer",' in source
     assert '"reward",' in source
+    assert '"reward_manager": {' in source
     assert '"distillation",' in source
     assert '"enabled": False' in source
     assert '"teacher_models"' in source
