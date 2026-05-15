@@ -4,6 +4,7 @@ defaults:
   - _self_
 
 _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
+rollout_n: ${oc.select:actor_rollout_ref.rollout.n,1}
 strategy: ${actor_rollout_ref.actor.strategy}
 entropy_from_logits_with_chunking: false
 entropy_checkpointing: false

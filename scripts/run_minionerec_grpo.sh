@@ -139,6 +139,7 @@ if [[ "${CONFIG_NAME}" != *"ddp"* ]]; then
 else
   ENGINE_OVERRIDES+=(
     "++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig"
+    "++actor_rollout_ref.actor.rollout_n=1"
     "++actor_rollout_ref.actor.strategy=ddp"
     "++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig"
     "++actor_rollout_ref.actor.engine_config.strategy=ddp"
@@ -146,6 +147,7 @@ else
     "++actor_rollout_ref.actor.engine_config.use_torch_compile=true"
     "++actor_rollout_ref.actor.engine_config.seed=42"
     "++actor_rollout_ref.ref._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig"
+    "++actor_rollout_ref.ref.rollout_n=1"
     "++actor_rollout_ref.ref.strategy=ddp"
     "++actor_rollout_ref.ref.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig"
     "++actor_rollout_ref.ref.engine_config.strategy=ddp"

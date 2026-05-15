@@ -223,9 +223,11 @@ def test_run_script_explicitly_pins_ddp_backend_fields():
     source = _read_text("scripts/run_minionerec_grpo.sh")
     assert '++actor_rollout_ref.actor.strategy=ddp' in source
     assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' in source
+    assert '++actor_rollout_ref.actor.rollout_n=1' in source
     assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' in source
     assert '++actor_rollout_ref.model._target_="verl.workers.config.HFModelConfig"' in source
     assert '++actor_rollout_ref.ref.strategy=ddp' in source
+    assert '++actor_rollout_ref.ref.rollout_n=1' in source
     assert '++actor_rollout_ref.ref.engine_config.forward_only=true' in source
     assert 'CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"' in source
 
@@ -239,9 +241,11 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     minionerec_model_source = _read_text("configs/verl_gr/model/minionerec_hf_model.yaml")
 
     assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in actor_source
+    assert "rollout_n: ${oc.select:actor_rollout_ref.rollout.n,1}" in actor_source
     assert "strategy: ddp" in actor_source
     assert "../engine@engine_config: ddp" in actor_source
     assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in ref_source
+    assert "rollout_n: ${oc.select:actor_rollout_ref.rollout.n,1}" in ref_source
     assert "forward_only: true" in ref_source
     assert "_target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in engine_source
     assert "strategy: ddp" in engine_source
