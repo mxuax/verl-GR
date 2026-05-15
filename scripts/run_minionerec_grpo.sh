@@ -227,8 +227,8 @@ echo "==================================="
   ++trainer.logger='[wandb]' \
   ++ray_kwargs.ray_init._temp_dir="${RAY_TMPDIR}" \
   ++ray_kwargs.ray_init.object_spilling_directory="${RAY_SPILL_DIR}" \
-  global_profiler.save_path="${OUTPUT_DIR}/profiles" \
-  critic.enable=False \
+  ++global_profiler.save_path="${OUTPUT_DIR}/profiles" \
+  ++critic.enable=False \
   "${ENGINE_OVERRIDES[@]}" \
   "$@"
 
