@@ -3,21 +3,21 @@
 # Uses PyTorch DistributedDataParallel instead of FSDP for faster
 # training on small models.
 #
-# Compose from concrete component configs instead of the generated flat
-# trainer schema. This keeps actor/ref nodes unstructured until our DDP
-# overrides apply, avoiding accidental fallback to FSDP targets.
+# Compose from concrete component configs instead of abstract actor/ref
+# skeletons. The backend now lives in dedicated DDP config groups, so
+# `main_ppo.py` no longer needs to heal missing actor/ref fields at runtime.
 
 hydra:
   searchpath:
     - pkg://verl.trainer.config
 
 defaults:
-  - /actor@actor_rollout_ref.actor: actor
+  - /actor@actor_rollout_ref.actor: ddp_actor
   - /data@data: legacy_data
-  - /ref@actor_rollout_ref.ref: ref
+  - /ref@actor_rollout_ref.ref: ddp_ref
   - /rollout@actor_rollout_ref.rollout: rollout
   - /model@actor_rollout_ref.model: hf_model
-  - /critic@critic: critic
+  - /critic@critic: dp_critic
   - /model@critic.model: hf_model
   - /legacy_reward_impl
   - /reward@reward: reward
@@ -31,12 +31,29 @@ task:
   trainer_adapter_class: verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter
 
 data:
+  tokenizer: ${actor_rollout_ref.model.path}
+  use_shm: false
   max_prompt_length: 2560
+  train_batch_size: 1024
+  val_batch_size: null
   prompt_key: prompt
+  reward_fn_key: source
+  tool_config_path: null
+  return_raw_input_ids: false
+  return_raw_chat: true
+  return_full_prompt: false
   shuffle: false
+  seed: null
+  dataloader_num_workers: 8
+  image_patch_size: 14
+  validation_shuffle: false
   max_response_length: 256
   filter_overlong_prompts: false
+  filter_overlong_prompts_workers: 1
   truncation: left
+  image_key: images
+  video_key: videos
+  trust_remote_code: false
   custom_cls:
     name: MiniOneRecDataset
     path: null
@@ -47,35 +64,75 @@ data:
   item_meta_path: null
   seq_title_sample: 10000
   data_source_key: source
-  reward_fn_key: source
+  return_multi_modal_inputs: true
+  sampler:
+    class_path: null
+    class_name: null
+  datagen:
+    path: null
+    name: null
+  apply_chat_template_kwargs: {}
 
 reward:
-  # Keep MiniOneRec aligned with the FSDP config and the reward-loop schema.
+  _target_: verl.trainer.config.RewardConfig
   num_workers: 1
+  launch_reward_fn_async: false
+  reward_type: function
+  reward_manager: naive
+  reward_model:
+    enable: false
+    rm_coef: 1.0
+    model:
+      path: ~/models/FsfairX-LLaMA3-RM-v0.1
+      tokenizer_path: ${actor_rollout_ref.model.path}
+      use_shared_fs: false
+      trust_remote_code: false
+      external_lib: null
+      override_config: {}
+      enable_gradient_checkpointing: false
+    micro_batch_size_per_gpu: null
+    log_prob_micro_batch_size_per_gpu: null
+    max_length: null
+    use_dynamic_batch: ${oc.select:critic.use_dynamic_bsz,false}
+    max_num_tokens: 16384
+    use_remove_padding: false
   custom_reward_function:
     path: null
     name: compute_score
+  verifier:
+    reward_coef: 1.0
+    tokenizer_path: ${actor_rollout_ref.model.path}
+    model:
+      path: null
+      tokenizer_path: ${actor_rollout_ref.model.path}
+      trust_remote_code: false
+      override_config: {}
+      use_remove_padding: false
+      use_shm: false
+      external_lib: null
+    micro_batch_size_per_gpu: null
+    max_length: null
+    use_dynamic_batch: ${oc.select:critic.use_dynamic_bsz,false}
+    max_num_tokens: 16384
+    param_offload: false
+    forward_max_token_len_per_gpu: ${oc.select:.max_num_tokens,null}
+    norm_batch_size: 256
+    verifier_prompt_template: null
 
 actor_rollout_ref:
   hybrid_engine: true
   nccl_timeout: 600
 
   ref:
-    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
-    strategy: ddp
     entropy_from_logits_with_chunking: true
     entropy_checkpointing: false
     engine_config:
-      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig
-      strategy: ddp
       forward_only: true
       model_dtype: bf16
       use_torch_compile: true
       seed: 42
 
   actor:
-    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
-    strategy: ddp
     entropy_from_logits_with_chunking: true
     entropy_checkpointing: true
     use_dynamic_bsz: true
@@ -88,8 +145,6 @@ actor_rollout_ref:
     policy_loss:
       loss_mode: minionerec_reinforce
     engine_config:
-      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig
-      strategy: ddp
       model_dtype: bf16
       use_torch_compile: true
       seed: 42

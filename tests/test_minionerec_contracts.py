@@ -173,10 +173,11 @@ def test_yaml_uses_hf_decode_modes():
 def test_ddp_yaml_uses_component_defaults_not_generated_schema():
     source = _read_text("configs/verl_gr/minionerec/grpo_trainer_ddp.yaml")
     assert "/_generated_ppo_trainer" not in source
-    assert "actor@actor_rollout_ref.actor: actor" in source
-    assert "ref@actor_rollout_ref.ref: ref" in source
-    assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in source
-    assert "_target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in source
+    assert "actor@actor_rollout_ref.actor: ddp_actor" in source
+    assert "ref@actor_rollout_ref.ref: ddp_ref" in source
+    assert "critic@critic: dp_critic" in source
+    assert "sampler:" in source
+    assert "reward_model:" in source
 
 
 def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
@@ -184,15 +185,32 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "_generated_ppo_trainer" not in source
     assert "_ensure_config_defaults" not in source
     assert "_normalize_strategy_targets" not in source
+    assert "_inject_runtime_root_placeholders" not in source
+    assert "_merge_missing" not in source
 
 
-def test_run_script_explicitly_forces_ddp_backend_fields():
+def test_run_script_does_not_duplicate_ddp_backend_fields():
     source = _read_text("scripts/run_minionerec_grpo.sh")
-    assert '++actor_rollout_ref.actor.strategy=ddp' in source
-    assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' in source
-    assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' in source
-    assert '++actor_rollout_ref.ref.strategy=ddp' in source
-    assert '++actor_rollout_ref.ref.engine_config.forward_only=true' in source
+    assert '++actor_rollout_ref.actor.strategy=ddp' not in source
+    assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' not in source
+    assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' not in source
+    assert '++actor_rollout_ref.ref.strategy=ddp' not in source
+    assert '++actor_rollout_ref.ref.engine_config.forward_only=true' not in source
+    assert 'CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"' in source
+
+
+def test_local_ddp_actor_and_ref_groups_are_concrete():
+    actor_source = _read_text("configs/verl_gr/actor/ddp_actor.yaml")
+    ref_source = _read_text("configs/verl_gr/ref/ddp_ref.yaml")
+    engine_source = _read_text("configs/verl_gr/engine/ddp.yaml")
+
+    assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in actor_source
+    assert "strategy: ddp" in actor_source
+    assert "../engine@engine_config: ddp" in actor_source
+    assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in ref_source
+    assert "forward_only: true" in ref_source
+    assert "_target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in engine_source
+    assert "strategy: ddp" in engine_source
 
 
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
