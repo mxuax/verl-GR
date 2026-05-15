@@ -8,7 +8,7 @@ hydra:
     - pkg://verl.trainer.config
 
 defaults:
-  - /ppo_trainer
+  - /openonerec/grpo_trainer
   - _self_
 
 task:
