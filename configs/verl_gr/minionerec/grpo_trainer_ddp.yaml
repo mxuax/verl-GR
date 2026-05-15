@@ -40,25 +40,6 @@ data:
   data_source_key: source
   reward_fn_key: source
 
-# Legacy placeholder — required by verl's migrate_legacy_reward_impl.
-# All fields are null so the migration is a no-op (config already uses the new format).
-reward_model:
-  num_workers: null
-  reward_manager: null
-  reward_loop_source: null
-  reward_loop_module_path: null
-  reward_loop_class_name: null
-  enable: null
-  enable_resource_pool: null
-  n_gpus_per_node: null
-  nnodes: null
-  model:
-    path: null
-
-custom_reward_function:
-  name: compute_score
-  path: null
-
 reward:
   num_workers: 1
 
