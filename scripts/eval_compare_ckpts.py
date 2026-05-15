@@ -61,9 +61,9 @@ def constrained_beam_generate(
     """
     from transformers import LogitsProcessor, LogitsProcessorList
 
-    hash_dict = _build_hash_dict(info_file, tokenizer)
+    prefix_index = _constraint_prefix_index(tokenizer)
+    hash_dict = _build_hash_dict(info_file, tokenizer, prefix_index=prefix_index)
     eos = tokenizer.eos_token_id
-    prefix_index = 3  # Qwen2
 
     class ConstrainedLogitsProcessor(LogitsProcessor):
         """Exact mirror of MiniOneRec ``LogitProcessor.py:24-72`` with evaluate.py hash_dict."""
@@ -124,9 +124,14 @@ def constrained_beam_generate(
     return completions
 
 
-def _build_hash_dict(info_file: str, tokenizer) -> dict[str, list[int]]:
+def _constraint_prefix_index(tokenizer) -> int:
+    return 4 if "gpt2" in str(type(tokenizer)).lower() else 3
+
+
+def _build_hash_dict(info_file: str, tokenizer, *, prefix_index: int | None = None) -> dict[str, list[int]]:
     """Build constraint hash dict — exact mirror of MiniOneRec ``evaluate.py:61-113``."""
-    prefix_index = 4 if "gpt2" in str(type(tokenizer)).lower() else 3
+    if prefix_index is None:
+        prefix_index = _constraint_prefix_index(tokenizer)
 
     with open(info_file, encoding="utf-8") as f:
         info = f.readlines()
