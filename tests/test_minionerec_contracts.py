@@ -198,6 +198,11 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "transfer_queue" in source
     assert "ray_kwargs" in source
     assert "global_profiler" in source
+    assert '"data",' in source
+    assert '"algorithm",' in source
+    assert '"trainer",' in source
+    assert '"reward",' in source
+    assert '"distillation",' in source
 
 
 def test_run_script_explicitly_pins_ddp_backend_fields():
