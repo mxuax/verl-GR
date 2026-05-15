@@ -56,7 +56,9 @@ class DDPActorConfig(ActorConfig):
     def __post_init__(self):
         super().__post_init__()
         self.engine = self.engine_config
-        self.engine.strategy = self.strategy
+        # Keep engine strategy in sync with actor strategy, matching
+        # upstream FSDPActorConfig's frozen-config update pattern.
+        object.__setattr__(self.engine, "strategy", self.strategy)
 
     def validate(self, n_gpus: int, train_batch_size: int, model_config: dict = None):
         super().validate(n_gpus, train_batch_size, model_config)

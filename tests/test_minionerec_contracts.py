@@ -206,6 +206,13 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"actor_rollout_ref",' in source
     assert '"hybrid_engine": True' in source
     assert '"nccl_timeout": 600' in source
+    assert '"model": {' in source
+    assert '"_target_": "verl.workers.config.HFModelConfig"' in source
+    assert '"rollout": {' in source
+    assert '"_target_": "verl.workers.config.RolloutConfig"' in source
+    assert '"val_kwargs": {' in source
+    assert '"checkpoint_engine": {' in source
+    assert '"skip": {' in source
     assert '"data",' in source
     assert '"dataloader_num_workers": 8' in source
     assert '"validation_shuffle": False' in source
@@ -255,6 +262,12 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     assert "forward_only: true" in minionerec_ref_source
     assert "defaults:\n  - hf_model" in minionerec_model_source
     assert "enable_gradient_checkpointing: true" in minionerec_model_source
+
+
+def test_ddp_actor_config_updates_frozen_engine_strategy_safely():
+    source = _read_text("verl_gr/workers/config/ddp_engine.py")
+    assert 'object.__setattr__(self.engine, "strategy", self.strategy)' in source
+    assert "self.engine.strategy = self.strategy" not in source
 
 
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
