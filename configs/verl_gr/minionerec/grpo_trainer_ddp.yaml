@@ -2,14 +2,31 @@
 # MiniOneRec GRPO config for verl-GR — DDP variant (no FSDP).
 # Uses PyTorch DistributedDataParallel instead of FSDP for faster
 # training on small models.
+#
+# Defaults are inlined from ppo_trainer.yaml instead of using
+# - /ppo_trainer because Hydra cannot resolve ${model_engine}*
+# interpolations when ppo_trainer is included as a defaults entry
+# from a subdirectory config (even with # @package _).
 
 hydra:
   searchpath:
     - pkg://verl.trainer.config
 
 defaults:
+  # === Inlined from ppo_trainer.yaml ===
   - model_engine: dp
-  - /ppo_trainer
+  - actor@actor_rollout_ref.actor: dp_actor
+  - data@data: legacy_data
+  - ref@actor_rollout_ref.ref: dp_ref
+  - rollout@actor_rollout_ref.rollout: rollout
+  - model@actor_rollout_ref.model: hf_model
+  - critic@critic: dp_critic
+  - model@critic.model: hf_model
+  - /legacy_reward_impl
+  - reward@reward: reward
+  - /algorithm@algorithm.rollout_correction: rollout_correction
+  - /distillation@distillation: distillation
+  # === End ppo_trainer defaults ===
   - _self_
 
 task:
