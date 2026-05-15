@@ -186,6 +186,15 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "_normalize_strategy_targets" not in source
 
 
+def test_run_script_explicitly_forces_ddp_backend_fields():
+    source = _read_text("scripts/run_minionerec_grpo.sh")
+    assert '++actor_rollout_ref.actor.strategy=ddp' in source
+    assert '++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig' in source
+    assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' in source
+    assert '++actor_rollout_ref.ref.strategy=ddp' in source
+    assert '++actor_rollout_ref.ref.engine_config.forward_only=true' in source
+
+
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
     source = _read_text("verl_gr/recipes/task_runtime.py")
     assert "def _infer_role_strategy(" in source

@@ -73,6 +73,12 @@ class RecipeTaskRuntime:
         if strategy:
             return strategy
 
+        engine_target = str(engine_cfg.get("_target_", "") or "").lower()
+        if "ddpengineconfig" in engine_target:
+            return "ddp"
+        if "fsdpengineconfig" in engine_target:
+            return "fsdp"
+
         target = str(role_cfg.get("_target_", "") or "").lower()
         if "ddpactorconfig" in target:
             return "ddp"

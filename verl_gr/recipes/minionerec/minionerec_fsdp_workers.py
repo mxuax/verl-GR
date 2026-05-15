@@ -29,7 +29,13 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        actor_strategy = str(self.config.actor.get("strategy", "") or self.config.actor.get("engine_config", {}).get("strategy", "") or "").lower()
+        actor_strategy = str(
+            self.config.actor.get("strategy", "")
+            or self.config.actor.get("engine_config", {}).get("strategy", "")
+            or self.config.actor.get("engine_config", {}).get("_target_", "")
+        ).lower()
+        if "ddpengineconfig" in actor_strategy:
+            actor_strategy = "ddp"
         # DDP skips registration: it uses hf_constrained_beam_generate directly
         # on the unwrapped module instead of the rollout-class dispatch path.
         if (self.config.rollout.name == "constrained_beam"

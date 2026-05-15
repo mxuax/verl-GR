@@ -136,6 +136,24 @@ if [[ "${CONFIG_NAME}" != *"ddp"* ]]; then
     "actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[${FSDP_TRANSFORMER_LAYERS}]"
     "actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[${FSDP_TRANSFORMER_LAYERS}]"
   )
+else
+  ENGINE_OVERRIDES+=(
+    "++actor_rollout_ref.actor._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig"
+    "++actor_rollout_ref.actor.strategy=ddp"
+    "++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig"
+    "++actor_rollout_ref.actor.engine_config.strategy=ddp"
+    "++actor_rollout_ref.actor.engine_config.model_dtype=bf16"
+    "++actor_rollout_ref.actor.engine_config.use_torch_compile=true"
+    "++actor_rollout_ref.actor.engine_config.seed=42"
+    "++actor_rollout_ref.ref._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig"
+    "++actor_rollout_ref.ref.strategy=ddp"
+    "++actor_rollout_ref.ref.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig"
+    "++actor_rollout_ref.ref.engine_config.strategy=ddp"
+    "++actor_rollout_ref.ref.engine_config.forward_only=true"
+    "++actor_rollout_ref.ref.engine_config.model_dtype=bf16"
+    "++actor_rollout_ref.ref.engine_config.use_torch_compile=true"
+    "++actor_rollout_ref.ref.engine_config.seed=42"
+  )
 fi
 
 echo "==================================="
