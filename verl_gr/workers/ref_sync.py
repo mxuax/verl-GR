@@ -8,6 +8,7 @@ tracks the current policy rather than the stale SFT checkpoint.
 from __future__ import annotations
 
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.fsdp_utils import (
@@ -27,6 +28,12 @@ class RefSyncMixin:
 
         actor_module = self.actor.engine.module
         ref_module = self.ref.engine.module
+
+        # DDP: full parameters on every rank — direct copy, no FSDP summon.
+        if isinstance(actor_module, DDP) and isinstance(ref_module, DDP):
+            ref_module.module.load_state_dict(actor_module.module.state_dict())
+            return
+
         ref_fsdp_ver = fsdp_version(ref_module)
 
         # FSDP2: only rank 0 gathers the full state dict; fsdp2_load_full_state_dict

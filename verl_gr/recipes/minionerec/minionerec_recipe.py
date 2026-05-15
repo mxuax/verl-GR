@@ -6,6 +6,9 @@ from omegaconf import OmegaConf
 from omegaconf import open_dict
 
 from verl_gr.recipes.minionerec.minionerec_dataset import MiniOneRecDataset
+from verl_gr.recipes.minionerec.minionerec_loss import (  # noqa: F401  # register REINFORCE policy loss
+    compute_policy_loss_minionerec_reinforce,
+)
 from verl_gr.recipes.minionerec.minionerec_reward import compute_score
 from verl_gr.recipes.task_runtime import RecipeTaskRuntime
 from verl_gr.workers.rollout.registration import (

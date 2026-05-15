@@ -2,8 +2,8 @@
 # MiniOneRec GRPO runtime launcher for verl-GR.
 
 # -----------------------------------------------------------------------------
-# 八卡示例（默认已与 MiniOneRec/rl.sh 对齐：batch 64、epochs 2、lr 1e-5、beam 16、
-# temperature 1.0、Industrial CSV；在 verl-GR 根目录执行）：
+# 八卡示例（默认走 MiniOneRec DDP 配置，并与 MiniOneRec/rl.sh 对齐：batch 64、epochs 2、
+# lr 1e-5、beam 16、temperature 1.0、Industrial CSV；在 verl-GR 根目录执行）：
 #
 #   cd /path/to/verl-GR
 #   BASE_MODEL=/home/dyvm6xra/dyvm6xrauser49/xms-gr/MiniOneRec/output_dir/xxx/checkpoint-390 \
@@ -73,6 +73,7 @@ VAL_LOG_GENERATIONS="${VAL_LOG_GENERATIONS:-8}"
 TASK_NAME="${TASK_NAME:-minionerec}"
 TASK_CLASS_PATH="${TASK_CLASS_PATH:-verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask}"
 REWARD_NUM_WORKERS="${REWARD_NUM_WORKERS:-1}"
+CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"
 DECODE_MODE_TRAIN="${DECODE_MODE_TRAIN:-hf_constrained_beam_sample}"
 DECODE_MODE_VAL="${DECODE_MODE_VAL:-hf_constrained_beam_eval}"
 DISABLE_CACHE_IN_TRAIN="${DISABLE_CACHE_IN_TRAIN:-true}"
@@ -100,6 +101,43 @@ export RAY_TMPDIR
 export TMPDIR="${RAY_TMPDIR}"
 export VERL_ZMQ_SOCKET_PREFIX
 
+CONFIG_NAME_FROM_ARGS=0
+PREV_WAS_CONFIG_NAME=0
+for arg in "$@"; do
+  if [[ "${PREV_WAS_CONFIG_NAME}" -eq 1 ]]; then
+    CONFIG_NAME="${arg}"
+    CONFIG_NAME_FROM_ARGS=1
+    PREV_WAS_CONFIG_NAME=0
+    continue
+  fi
+
+  case "${arg}" in
+    --config-name)
+      PREV_WAS_CONFIG_NAME=1
+      ;;
+    --config-name=*)
+      CONFIG_NAME="${arg#--config-name=}"
+      CONFIG_NAME_FROM_ARGS=1
+      break
+      ;;
+  esac
+done
+
+CONFIG_NAME_ARG=()
+if [[ "${CONFIG_NAME_FROM_ARGS}" -eq 0 ]]; then
+  CONFIG_NAME_ARG=(--config-name="${CONFIG_NAME}")
+fi
+
+ENGINE_OVERRIDES=()
+ENGINE_FAMILY="ddp"
+if [[ "${CONFIG_NAME}" != *"ddp"* ]]; then
+  ENGINE_FAMILY="fsdp"
+  ENGINE_OVERRIDES+=(
+    "actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[${FSDP_TRANSFORMER_LAYERS}]"
+    "actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[${FSDP_TRANSFORMER_LAYERS}]"
+  )
+fi
+
 echo "==================================="
 echo "MiniOneRec GRPO (verl-GR runtime)"
 echo "==================================="
@@ -114,9 +152,12 @@ echo "Beam width: ${BEAM_WIDTH} (rl.sh num_generations)"
 echo "Decode mode (train/val): ${DECODE_MODE_TRAIN}/${DECODE_MODE_VAL}"
 echo "Train batch size: ${TRAIN_BATCH_SIZE} | epochs: ${TOTAL_EPOCHS} | lr: ${LEARNING_RATE}"
 echo "Task: ${TASK_NAME} (${TASK_CLASS_PATH})"
+echo "Config: ${CONFIG_NAME} | backend: ${ENGINE_FAMILY}"
 echo "Reward workers: ${REWARD_NUM_WORKERS}"
 echo "PPO micro_batch/GPU: ${PPO_MICRO_BATCH_PER_GPU} (≈rl gradient_accum_steps 2)"
-echo "FSDP wrap layer: ${FSDP_TRANSFORMER_LAYERS}"
+if [[ "${ENGINE_FAMILY}" == "fsdp" ]]; then
+  echo "FSDP wrap layer: ${FSDP_TRANSFORMER_LAYERS}"
+fi
 echo "Item max tokens: ${ITEM_MAX_TOKENS}"
 echo "Output: ${OUTPUT_DIR}"
 echo "Ray tmp (short path for Unix socket limit): ${RAY_TMPDIR}"
@@ -124,6 +165,7 @@ echo "ZMQ socket prefix: ${VERL_ZMQ_SOCKET_PREFIX}"
 echo "==================================="
 
 "${PYTHON_BIN}" -u -m verl_gr.trainers.main_ppo \
+  "${CONFIG_NAME_ARG[@]}" \
   ++task.name="${TASK_NAME}" \
   ++task.class_path="${TASK_CLASS_PATH}" \
   ++task.trainer_adapter_class="verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter" \
@@ -161,8 +203,6 @@ echo "==================================="
   actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
   actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
-  actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap="[${FSDP_TRANSFORMER_LAYERS}]" \
-  actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap="[${FSDP_TRANSFORMER_LAYERS}]" \
   trainer.total_epochs="${TOTAL_EPOCHS}" \
   actor_rollout_ref.rollout.custom.beam_width="${BEAM_WIDTH}" \
   ++actor_rollout_ref.rollout.custom.decode_mode_train="${DECODE_MODE_TRAIN}" \
@@ -189,6 +229,7 @@ echo "==================================="
   +ray_kwargs.ray_init.object_spilling_directory="${RAY_SPILL_DIR}" \
   global_profiler.save_path="${OUTPUT_DIR}/profiles" \
   critic.enable=False \
+  "${ENGINE_OVERRIDES[@]}" \
   "$@"
 
 # -----------------------------------------------------------------------------

@@ -48,6 +48,7 @@ export CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS="${CONSTRAINED_BEAM_MAX_INFLIGHT_R
 export TASK_NAME="${TASK_NAME:-minionerec}"
 export TASK_CLASS_PATH="${TASK_CLASS_PATH:-verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask}"
 export REWARD_NUM_WORKERS="${REWARD_NUM_WORKERS:-1}"
+export CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"
 
 # 与 rl.sh 数值对齐
 export TRAIN_BATCH_SIZE=64

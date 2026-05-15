@@ -26,7 +26,7 @@ from verl_gr.recipes.openonerec.onerec_recipe import OneRecTask
 from verl_gr.recipes.rankgrpo.rankgrpo_task import RankGRPOTask
 from verl_gr.trainers.rl_trainer import RLTrainer
 
-_CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr" / "openonerec"
+_CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr"
 
 
 @dataclass(frozen=True)
@@ -172,7 +172,7 @@ def _build_main():
         config = migrate_legacy_reward_impl(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
 
-    @hydra.main(config_path=str(_CONFIG_ROOT), config_name="grpo_trainer", version_base=None)
+    @hydra.main(config_path=str(_CONFIG_ROOT), config_name="openonerec/grpo_trainer", version_base=None)
     def main(config):
         run_ppo(config)
 

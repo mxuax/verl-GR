@@ -9,6 +9,9 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.workers.engine_workers import ActorRolloutRefWorker
+from verl_gr.recipes.minionerec.minionerec_loss import (  # noqa: F401  # register REINFORCE loss on every worker
+    compute_policy_loss_minionerec_reinforce,
+)
 from verl_gr.workers.ref_sync import RefSyncMixin
 from verl_gr.workers.rollout.registration import register_constrained_beam_rollout_class
 
@@ -26,7 +29,10 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        if self.config.rollout.name == "constrained_beam":
+        # DDP skips registration: it uses hf_constrained_beam_generate directly
+        # on the unwrapped module instead of the rollout-class dispatch path.
+        if (self.config.rollout.name == "constrained_beam"
+            and self.config.actor.strategy not in ("ddp",)):
             register_constrained_beam_rollout_class()
 
         # self.role is a str (e.g. "actor_rollout_ref"), not a set.
@@ -102,6 +108,8 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
 
         tokenizer = self._hf_cached_tokenizer
         actor_module = self.actor.engine.module
+        if isinstance(actor_module, torch.nn.parallel.DistributedDataParallel):
+            actor_module = actor_module.module
         info_file = meta_info["info_file"]
         beam_width = int(meta_info.get("beam_width", 16))
         do_sample = bool(meta_info.get("do_sample", True))

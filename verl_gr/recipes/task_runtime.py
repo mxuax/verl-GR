@@ -143,7 +143,10 @@ class RecipeTaskRuntime:
             trust_remote_code=trust_remote_code,
         )
 
-        if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
+        if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2", "ddp"}:
+            # Side-effect: register DDP engine with verl's EngineRegistry
+            if config.actor_rollout_ref.actor.strategy == "ddp":
+                import verl_gr.workers.engine.ddp  # noqa: F401
             ray_worker_group_cls = RayWorkerGroup
             actor_rollout_cls = self.get_actor_rollout_ref_worker(config)
             critic_worker = TrainingWorker

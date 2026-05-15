@@ -1,4 +1,13 @@
-# MiniOneRec GRPO config for verl-GR.
+# MiniOneRec GRPO config for verl-GR — DDP variant (no FSDP).
+# Uses PyTorch DistributedDataParallel instead of FSDP for faster
+# training on small models.
+#
+# Usage:
+#   python -m verl_gr.trainers.main_ppo --config-name=grpo_trainer_ddp
+#
+# Or with CLI overrides:
+#   bash scripts/run_minionerec_grpo_align_rl_sh_4gpu.sh \
+#     --config-name=grpo_trainer_ddp
 
 hydra:
   searchpath:
@@ -37,25 +46,27 @@ custom_reward_function:
   path: null
 
 reward:
-  # MiniOneRec uses a lightweight rule-based reward function.
-  # Spawning the global default (8) reward loop workers makes each one load
-  # tokenizer state and can trigger host-memory pressure during startup.
   num_workers: 1
 
 actor_rollout_ref:
   hybrid_engine: true
 
   ref:
+    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
+    strategy: ddp
     entropy_from_logits_with_chunking: true
-    fsdp_config:
-      model_dtype: bfloat16
-    profiler:
-      enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
-      all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
-      ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
+    entropy_checkpointing: false
+    engine_config:
+      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig
+      strategy: ddp
+      forward_only: true
+      model_dtype: bf16
+      use_torch_compile: true
+      seed: 42
 
   actor:
-    # 与 ref 一致：rmpad 路径下用分块熵，避免 (bsz, seq, vocab) 全量 softmax 导致数十 GB 峰值
+    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig
+    strategy: ddp
     entropy_from_logits_with_chunking: true
     entropy_checkpointing: true
     use_dynamic_bsz: true
@@ -67,18 +78,18 @@ actor_rollout_ref:
     kl_loss_type: low_var_kl
     policy_loss:
       loss_mode: minionerec_reinforce
+    engine_config:
+      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig
+      strategy: ddp
+      model_dtype: bf16
+      use_torch_compile: true
+      seed: 42
     optim:
       lr: 1e-5
       lr_warmup_steps_ratio: 0.03
       weight_decay: 0.0
       clip_grad: 0.3
       lr_scheduler_type: cosine
-    fsdp_config:
-      model_dtype: bfloat16
-    profiler:
-      enable: false
-      all_ranks: false
-      ranks: [0]
 
   rollout:
     name: constrained_beam
@@ -96,8 +107,6 @@ actor_rollout_ref:
     calculate_log_probs: false
     layered_summon: false
     custom:
-      # MiniOneRec semantics: constrained-beam groups per prompt before beam expansion.
-      # Effective rollout requests per prompt = num_generations_per_prompt * beam_width.
       num_generations_per_prompt: 1
       beam_width: 16
       val_beam_width: 50
@@ -120,16 +129,10 @@ actor_rollout_ref:
     engine_kwargs:
       vllm:
         max_logprobs: 320
-    profiler:
-      enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
-      all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
-      ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
 
   model:
     enable_activation_offload: true
     enable_gradient_checkpointing: true
-    # 必须为 true，否则 FSDP 在 use_fused_kernels=false 时走非 rmpad 分支，
-    # entropy_from_logits 会对整段 padded logits 做 softmax，大词表下易 OOM。
     use_remove_padding: true
     use_fused_kernels: false
     fused_kernel_options:
@@ -142,7 +145,7 @@ algorithm:
 
 trainer:
   project_name: MiniOneRec_RL
-  experiment_name: minionerec_grpo_constrained_beam
+  experiment_name: minionerec_grpo_ddp
   val_before_train: true
   best_ckpt_metric: val-aux/*/hr@20/mean
   default_hdfs_dir: null
@@ -156,10 +159,6 @@ trainer:
 
 critic:
   enable: false
-  profiler:
-    enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
-    all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
-    ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
 
 global_profiler:
   tool: null

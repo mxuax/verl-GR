@@ -31,7 +31,9 @@ class RankGRPOTask(RecipeTaskRuntime):
             force_pad_to_eos=rank_cfg.get("force_pad_to_eos", True),
         )
 
-        if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2", "megatron"}:
+        if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2", "megatron", "ddp"}:
+            if config.actor_rollout_ref.actor.strategy == "ddp":
+                import verl_gr.workers.engine.ddp  # noqa: F401
             ray_worker_group_cls = RayWorkerGroup
             actor_rollout_cls = ActorRolloutRefWorker
             critic_worker = TrainingWorker
