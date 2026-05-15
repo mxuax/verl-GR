@@ -151,6 +151,19 @@ def _inject_legacy_reward_placeholders(config) -> None:
             OmegaConf.update(config, key, value, force_add=True)
 
 
+def _merge_missing(config, base_path: str, value) -> None:
+    """Recursively fill missing OmegaConf fields without overriding existing values."""
+    if isinstance(value, dict):
+        if base_path and OmegaConf.select(config, base_path) is None:
+            OmegaConf.update(config, base_path, {}, force_add=True)
+        for sub_key, sub_value in value.items():
+            sub_path = f"{base_path}.{sub_key}" if base_path else sub_key
+            _merge_missing(config, sub_path, sub_value)
+        return
+    if OmegaConf.select(config, base_path) is None:
+        OmegaConf.update(config, base_path, value, force_add=True)
+
+
 def _inject_runtime_root_placeholders(config) -> None:
     """Provide root-level runtime keys that base verl accesses directly."""
     placeholders = (
@@ -219,8 +232,7 @@ def _inject_runtime_root_placeholders(config) -> None:
         ),
     )
     for key, value in placeholders:
-        if OmegaConf.select(config, key) is None:
-            OmegaConf.update(config, key, value, force_add=True)
+        _merge_missing(config, key, value)
 
 
 def _build_main():
