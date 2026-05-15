@@ -206,6 +206,7 @@ echo "==================================="
   ++data.max_prompt_length="${MAX_PROMPT_LENGTH:-2560}" \
   ++data.max_response_length="${MAX_RESPONSE_LENGTH:-64}" \
   ++actor_rollout_ref.model._target_="verl.workers.config.HFModelConfig" \
+  ++actor_rollout_ref.model.external_lib="verl_gr.workers.engine.ddp" \
   ++actor_rollout_ref.model.path="${BASE_MODEL}" \
   ++actor_rollout_ref.rollout.name="constrained_beam" \
   ++actor_rollout_ref.rollout.mode="${ROLLOUT_MODE}" \

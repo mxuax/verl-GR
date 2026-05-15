@@ -233,6 +233,7 @@ def test_run_script_explicitly_pins_ddp_backend_fields():
     assert '++actor_rollout_ref.actor.rollout_n=1' in source
     assert '++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig' in source
     assert '++actor_rollout_ref.model._target_="verl.workers.config.HFModelConfig"' in source
+    assert '++actor_rollout_ref.model.external_lib="verl_gr.workers.engine.ddp"' in source
     assert '++actor_rollout_ref.ref.strategy=ddp' in source
     assert '++actor_rollout_ref.ref.rollout_n=1' in source
     assert '++actor_rollout_ref.ref.engine_config.forward_only=true' in source
@@ -262,12 +263,21 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     assert "forward_only: true" in minionerec_ref_source
     assert "defaults:\n  - hf_model" in minionerec_model_source
     assert "enable_gradient_checkpointing: true" in minionerec_model_source
+    assert "external_lib: verl_gr.workers.engine.ddp" in minionerec_model_source
 
 
 def test_ddp_actor_config_updates_frozen_engine_strategy_safely():
     source = _read_text("verl_gr/workers/config/ddp_engine.py")
     assert 'object.__setattr__(self.engine, "strategy", self.strategy)' in source
     assert "self.engine.strategy = self.strategy" not in source
+
+
+def test_ddp_backend_registration_is_importable_via_model_external_lib():
+    source = _read_text("verl_gr/workers/engine/ddp/__init__.py")
+    assert "DDPEngineWithLMHead" in source
+    transformer_impl = _read_text("verl_gr/workers/engine/ddp/transformer_impl.py")
+    assert 'EngineRegistry.register(' in transformer_impl
+    assert 'backend=["ddp"]' in transformer_impl
 
 
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
