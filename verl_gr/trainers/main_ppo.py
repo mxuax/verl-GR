@@ -9,7 +9,7 @@ from typing import Callable
 
 import hydra
 import ray
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from verl.trainer.main_ppo import (
     TaskRunner as BaseTaskRunner,
@@ -29,6 +29,15 @@ from verl_gr.trainers.rl_trainer import RLTrainer
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr"
 _PPO_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "verl" / "verl" / "trainer" / "config" / "_generated_ppo_trainer.yaml"
+_SAFE_ROOT_SCHEMA_KEYS = (
+    "transfer_queue",
+    "ray_kwargs",
+    "distillation",
+    "reward",
+    "reward_model",
+    "custom_reward_function",
+    "sandbox_fusion",
+)
 
 
 @dataclass(frozen=True)
@@ -127,6 +136,10 @@ def _normalize_strategy_targets(config) -> None:
         OmegaConf.update(config, f"{role_path}._target_", ddp_actor_target, force_add=True)
         OmegaConf.update(config, f"{role_path}.engine_config._target_", ddp_engine_target, force_add=True)
         OmegaConf.update(config, f"{role_path}.engine_config.strategy", "ddp", force_add=True)
+        with open_dict(config):
+            role_cfg = OmegaConf.select(config, role_path)
+            if role_cfg is not None and "fsdp_config" in role_cfg:
+                del role_cfg["fsdp_config"]
 
 
 def _build_main():
@@ -209,7 +222,10 @@ def _build_main():
         # Load the generated PPO schema and recursively add only missing keys so
         # user overrides and task-specific settings always win.
         base_schema = OmegaConf.load(_PPO_SCHEMA_PATH)
-        _ensure_config_defaults(config, "", OmegaConf.to_container(base_schema, resolve=False))
+        base_schema_dict = OmegaConf.to_container(base_schema, resolve=False)
+        for root_key in _SAFE_ROOT_SCHEMA_KEYS:
+            if root_key in base_schema_dict:
+                _ensure_config_defaults(config, root_key, base_schema_dict[root_key])
         _normalize_strategy_targets(config)
 
         config = migrate_legacy_reward_impl(config)
