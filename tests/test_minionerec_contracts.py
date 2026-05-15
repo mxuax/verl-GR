@@ -202,6 +202,9 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"hybrid_engine": True' in source
     assert '"nccl_timeout": 600' in source
     assert '"data",' in source
+    assert '"dataloader_num_workers": 8' in source
+    assert '"validation_shuffle": False' in source
+    assert '"filter_overlong_prompts_workers": 1' in source
     assert '"algorithm",' in source
     assert '"trainer",' in source
     assert '"reward",' in source
