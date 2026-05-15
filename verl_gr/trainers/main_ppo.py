@@ -276,6 +276,13 @@ def _ensure_runtime_root_blocks(config) -> None:
             },
         ),
         (
+            "actor_rollout_ref",
+            {
+                "hybrid_engine": True,
+                "nccl_timeout": 600,
+            },
+        ),
+        (
             "data",
             {
                 "sampler": {

@@ -198,6 +198,9 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "transfer_queue" in source
     assert "ray_kwargs" in source
     assert "global_profiler" in source
+    assert '"actor_rollout_ref",' in source
+    assert '"hybrid_engine": True' in source
+    assert '"nccl_timeout": 600' in source
     assert '"data",' in source
     assert '"algorithm",' in source
     assert '"trainer",' in source
