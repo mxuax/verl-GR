@@ -1,13 +1,7 @@
+# @package _
 # MiniOneRec GRPO config for verl-GR — DDP variant (no FSDP).
 # Uses PyTorch DistributedDataParallel instead of FSDP for faster
 # training on small models.
-#
-# Usage:
-#   python -m verl_gr.trainers.main_ppo --config-name=grpo_trainer_ddp
-#
-# Or with CLI overrides:
-#   bash scripts/run_minionerec_grpo_align_rl_sh_4gpu.sh \
-#     --config-name=grpo_trainer_ddp
 
 hydra:
   searchpath:

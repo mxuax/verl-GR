@@ -1,3 +1,4 @@
+# @package _
 # OpenOneRec GRPO config for verl release/v0.7.1.
 # Compose from upstream ppo_trainer to inherit all struct keys
 # (notably global_profiler, ray_kwargs, transfer_queue) and dataclass targets.

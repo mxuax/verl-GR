@@ -1,3 +1,4 @@
+# @package _
 # Minimal Rank-GRPO config for verl release/v0.7.1.
 # Composes from upstream PPO trainer config and keeps rollout on vanilla vLLM.
 
@@ -6,7 +7,7 @@ hydra:
     - pkg://verl.trainer.config
 
 defaults:
-  - ppo_trainer
+  - /ppo_trainer
   - _self_
 
 task:
