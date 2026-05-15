@@ -11,10 +11,10 @@
 #   --num_generations 16           -> BEAM_WIDTH=16
 #   --temperature 1.0              -> ROLLOUT_TEMPERATURE=1.0
 #   --learning_rate 1e-5           -> LEARNING_RATE=1e-5
-#   --beta 1e-3                    -> actor_rollout_ref.actor.kl_loss_coef=0.001
+#   --beta 1e-3                    -> +actor_rollout_ref.actor.kl_loss_coef=0.001
 #   --test_during_training False   -> trainer.val_before_train=false
 #   SidDataset 的 seq_title 采样    -> SEQ_TITLE_SAMPLE=10000（与 rl.py 中 RLSeqTitle2SidDataset 一致）
-#   seed（rl.py 默认 42）            -> data.seed=42
+#   seed（rl.py 默认 42）            -> +data.seed=42
 #
 # 未做一一映射（verl 语义不同）: eval_batch_size、eval_step；可用 trainer.test_freq 等自行加覆盖。
 #
@@ -76,17 +76,17 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 
 cd "${VERL_GR_ROOT}"
 bash scripts/run_minionerec_grpo.sh \
-  data.shuffle=true \
-  data.seed=42 \
-  trainer.val_before_train=true \
-  trainer.save_freq=165 \
-  trainer.test_freq=165 \
-  data.filter_overlong_prompts=false \
-  data.truncation=left \
-  actor_rollout_ref.actor.kl_loss_coef=0.001 \
-  actor_rollout_ref.actor.use_dynamic_bsz=true \
-  actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
-  actor_rollout_ref.model.use_remove_padding=true \
-  actor_rollout_ref.actor.entropy_from_logits_with_chunking=true \
-  actor_rollout_ref.actor.entropy_checkpointing=true \
+  +data.shuffle=true \
+  +data.seed=42 \
+  +trainer.val_before_train=true \
+  +trainer.save_freq=165 \
+  +trainer.test_freq=165 \
+  +data.filter_overlong_prompts=false \
+  +data.truncation=left \
+  +actor_rollout_ref.actor.kl_loss_coef=0.001 \
+  +actor_rollout_ref.actor.use_dynamic_bsz=true \
+  +actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
+  +actor_rollout_ref.model.use_remove_padding=true \
+  +actor_rollout_ref.actor.entropy_from_logits_with_chunking=true \
+  +actor_rollout_ref.actor.entropy_checkpointing=true \
   "$@"
