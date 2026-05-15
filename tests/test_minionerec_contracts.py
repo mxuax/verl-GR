@@ -185,8 +185,11 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert "_generated_ppo_trainer" not in source
     assert "_ensure_config_defaults" not in source
     assert "_normalize_strategy_targets" not in source
-    assert "_inject_runtime_root_placeholders" not in source
     assert "_merge_missing" not in source
+    assert "_ensure_runtime_root_blocks(config)" in source
+    assert "transfer_queue" in source
+    assert "ray_kwargs" in source
+    assert "global_profiler" in source
 
 
 def test_run_script_does_not_duplicate_ddp_backend_fields():

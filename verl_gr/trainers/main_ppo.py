@@ -151,6 +151,78 @@ def _inject_legacy_reward_placeholders(config) -> None:
             OmegaConf.update(config, key, value, force_add=True)
 
 
+def _ensure_runtime_root_blocks(config) -> None:
+    """Backfill root runtime blocks that base verl dereferences before TaskRunner."""
+    placeholders = (
+        (
+            "transfer_queue",
+            {
+                "enable": False,
+                "backend": {
+                    "storage_backend": "SimpleStorage",
+                    "SimpleStorage": {
+                        "total_storage_size": 100000,
+                        "num_data_storage_units": 8,
+                    },
+                },
+            },
+        ),
+        (
+            "ray_kwargs",
+            {
+                "ray_init": {"num_cpus": None},
+                "timeline_json_file": None,
+            },
+        ),
+        (
+            "global_profiler",
+            {
+                "_target_": "verl.utils.profiler.ProfilerConfig",
+                "tool": None,
+                "steps": None,
+                "profile_continuous_steps": False,
+                "save_path": "outputs/profile",
+                "global_tool_config": {
+                    "nsys": {
+                        "_target_": "verl.utils.profiler.config.NsightToolConfig",
+                        "discrete": False,
+                        "controller_nsight_options": {
+                            "trace": "cuda,nvtx,cublas,ucx",
+                            "cuda-memory-usage": "true",
+                            "cuda-graph-trace": "graph",
+                        },
+                        "worker_nsight_options": {
+                            "trace": "cuda,nvtx,cublas,ucx",
+                            "cuda-memory-usage": "true",
+                            "cuda-graph-trace": "graph",
+                            "capture-range": "cudaProfilerApi",
+                            "capture-range-end": None,
+                            "kill": "none",
+                        },
+                    },
+                    "torch_memory": {
+                        "trace_alloc_max_entries": 100000,
+                        "stack_depth": 32,
+                        "context": "all",
+                        "stacks": "all",
+                        "kw_args": {},
+                    },
+                    "precision_debugger": {
+                        "_target_": "verl.utils.profiler.config.PrecisionDebuggerToolConfig",
+                        "config_path": None,
+                        "steps": None,
+                        "stages": None,
+                        "strict": False,
+                    },
+                },
+            },
+        ),
+    )
+    for key, value in placeholders:
+        if OmegaConf.select(config, key) is None:
+            OmegaConf.update(config, key, value, force_add=True)
+
+
 def _build_main():
     @ray.remote(num_cpus=1)
     class TaskRunner(BaseTaskRunner):
@@ -226,6 +298,7 @@ def _build_main():
         auto_set_device(config)
         _inject_legacy_reward_placeholders(config)
         config = migrate_legacy_reward_impl(config)
+        _ensure_runtime_root_blocks(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
 
     @hydra.main(config_path=str(_CONFIG_ROOT), config_name="openonerec/grpo_trainer", version_base=None)
