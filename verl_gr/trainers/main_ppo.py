@@ -152,8 +152,7 @@ def _build_main():
         def run(self, config):
             task_impl = _select_task(config)
             task_impl.sanitize_fsdp2_wrap_policy(config)
-            pprint(OmegaConf.to_container(config, resolve=True))
-            OmegaConf.resolve(config)
+            pprint(OmegaConf.to_container(config, resolve=False))
             prepared = task_impl.prepare(config)
             tokenizer = prepared["tokenizer"]
             processor = prepared["processor"]
