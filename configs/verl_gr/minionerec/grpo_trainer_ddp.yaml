@@ -14,7 +14,7 @@ hydra:
     - pkg://verl.trainer.config
 
 defaults:
-  - ppo_trainer
+  - /ppo_trainer
   - _self_
 
 task:
