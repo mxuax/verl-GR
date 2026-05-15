@@ -1,6 +1,7 @@
 """Task-aware PPO entrypoint for verl-gr recipes."""
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
@@ -27,6 +28,7 @@ from verl_gr.recipes.rankgrpo.rankgrpo_task import RankGRPOTask
 from verl_gr.trainers.rl_trainer import RLTrainer
 
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr"
+_PPO_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "verl" / "verl" / "trainer" / "config" / "_generated_ppo_trainer.yaml"
 
 
 @dataclass(frozen=True)
@@ -97,12 +99,14 @@ def _select_task(config):
         raise ValueError(f"Unknown verl-gr task '{task_name}'. Expected one of: {valid}") from exc
 
 
-def _ensure_config_defaults(config, base_path: str, defaults: dict) -> None:
+def _ensure_config_defaults(config, base_path: str, defaults) -> None:
     """Recursively add missing OmegaConf keys without overwriting user values."""
+    if not isinstance(defaults, Mapping):
+        return
     for key, value in defaults.items():
         path = f"{base_path}.{key}" if base_path else key
         existing = OmegaConf.select(config, path)
-        if isinstance(value, dict):
+        if isinstance(value, Mapping):
             if existing is None:
                 OmegaConf.update(config, path, {}, force_add=True)
             _ensure_config_defaults(config, path, value)
@@ -185,76 +189,12 @@ def _build_main():
         task_impl.sanitize_fsdp2_wrap_policy(config)
         auto_set_device(config)
 
-        # inject_legacy_keys: migrate_legacy_reward_impl accesses root-level
-        # config.reward_model and config.custom_reward_function with direct
-        # attribute access (`.xxx`), which raises ConfigAttributeError if
-        # the key is missing.  When using # @package _ with subdirectory
-        # Hydra configs these legacy keys may not land at the root package.
-        # Inject null placeholders so the migration is a no-op (our config
-        # already uses the new format).
-        from omegaconf import OmegaConf
-        _legacy_placeholders = (
-            (
-                "reward",
-                {
-                    "num_workers": 8,
-                    "custom_reward_function": {"path": None, "name": "compute_score"},
-                    "reward_manager": {
-                        "source": "register",
-                        "name": "naive",
-                        "module": {"path": None, "name": "custom_reward_manager"},
-                    },
-                    "reward_model": {
-                        "enable": False,
-                        "enable_resource_pool": False,
-                        "n_gpus_per_node": 8,
-                        "nnodes": 0,
-                        "model_path": None,
-                        "rollout": {},
-                    },
-                    "sandbox_fusion": {
-                        "url": None,
-                        "max_concurrent": 64,
-                        "memory_limit_mb": 1024,
-                    },
-                },
-            ),
-            ("reward_model", {
-                "num_workers": None, "reward_manager": None,
-                "reward_loop_source": None, "reward_loop_module_path": None,
-                "reward_loop_class_name": None, "enable": None,
-                "enable_resource_pool": None, "n_gpus_per_node": None,
-                "nnodes": None, "reward_kwargs": None,
-                "model": {"path": None, "external_lib": None, "trust_remote_code": None},
-                "rollout": {
-                    "name": None,
-                    "dtype": None,
-                    "gpu_memory_utilization": None,
-                    "enforce_eager": None,
-                    "cudagraph_capture_sizes": None,
-                    "free_cache_engine": None,
-                    "data_parallel_size": None,
-                    "expert_parallel_size": None,
-                    "tensor_model_parallel_size": None,
-                    "max_num_batched_tokens": None,
-                    "max_model_len": None,
-                    "max_num_seqs": None,
-                    "load_format": None,
-                    "engine_kwargs": None,
-                    "limit_images": None,
-                    "enable_chunked_prefill": None,
-                    "enable_prefix_caching": None,
-                    "disable_log_stats": None,
-                    "skip_tokenizer_init": None,
-                    "prompt_length": None,
-                    "response_length": None,
-                },
-            }),
-            ("custom_reward_function", {"path": None, "name": None}),
-            ("sandbox_fusion", {"url": None, "max_concurrent": None, "memory_limit_mb": None}),
-        )
-        for _key, _val in _legacy_placeholders:
-            _ensure_config_defaults(config, _key, _val)
+        # MiniOneRec DDP config composes from a flattened trainer config and may
+        # miss root-level fields that base verl's run_ppo() assumes exist.
+        # Load the generated PPO schema and recursively add only missing keys so
+        # user overrides and task-specific settings always win.
+        base_schema = OmegaConf.load(_PPO_SCHEMA_PATH)
+        _ensure_config_defaults(config, "", OmegaConf.to_container(base_schema, resolve=False))
 
         config = migrate_legacy_reward_impl(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
