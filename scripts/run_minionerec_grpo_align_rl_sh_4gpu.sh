@@ -76,17 +76,17 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 
 cd "${VERL_GR_ROOT}"
 bash scripts/run_minionerec_grpo.sh \
-  +data.shuffle=true \
-  +data.seed=42 \
-  +trainer.val_before_train=true \
-  +trainer.save_freq=165 \
-  +trainer.test_freq=165 \
-  +data.filter_overlong_prompts=false \
-  +data.truncation=left \
-  +actor_rollout_ref.actor.kl_loss_coef=0.001 \
-  +actor_rollout_ref.actor.use_dynamic_bsz=true \
-  +actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
-  +actor_rollout_ref.model.use_remove_padding=true \
-  +actor_rollout_ref.actor.entropy_from_logits_with_chunking=true \
-  +actor_rollout_ref.actor.entropy_checkpointing=true \
+  ++data.shuffle=true \
+  ++data.seed=42 \
+  ++trainer.val_before_train=true \
+  ++trainer.save_freq=165 \
+  ++trainer.test_freq=165 \
+  ++data.filter_overlong_prompts=false \
+  ++data.truncation=left \
+  ++actor_rollout_ref.actor.kl_loss_coef=0.001 \
+  ++actor_rollout_ref.actor.use_dynamic_bsz=true \
+  ++actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
+  ++actor_rollout_ref.model.use_remove_padding=true \
+  ++actor_rollout_ref.actor.entropy_from_logits_with_chunking=true \
+  ++actor_rollout_ref.actor.entropy_checkpointing=true \
   "$@"
