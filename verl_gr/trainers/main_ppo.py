@@ -169,6 +169,26 @@ def _build_main():
         task_impl = _select_task(config)
         task_impl.sanitize_fsdp2_wrap_policy(config)
         auto_set_device(config)
+
+        # migrate_legacy_reward_impl accesses config.reward_model at root.
+        # When using # @package _ with subdirectory Hydra configs, this key
+        # may not land at the root package.  Inject a placeholder so the
+        # migration becomes a no-op (our config already uses the new format).
+        from omegaconf import OmegaConf
+        if not OmegaConf.select(config, "reward_model"):
+            OmegaConf.update(config, "reward_model", {
+                "num_workers": None,
+                "reward_manager": None,
+                "reward_loop_source": None,
+                "reward_loop_module_path": None,
+                "reward_loop_class_name": None,
+                "enable": None,
+                "enable_resource_pool": None,
+                "n_gpus_per_node": None,
+                "nnodes": None,
+                "model": {"path": None},
+            }, force_add=True)
+
         config = migrate_legacy_reward_impl(config)
         base_run_ppo(config, task_runner_class=TaskRunner)
 
