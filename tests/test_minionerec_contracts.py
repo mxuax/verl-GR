@@ -213,6 +213,13 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"_target_": "verl.workers.config.HFModelConfig"' in source
     assert '"rollout": {' in source
     assert '"_target_": "verl.workers.config.RolloutConfig"' in source
+    assert '"actor": {' in source
+    assert '"loss_agg_mode": "token-mean"' in source
+    assert '"ppo_epochs": 1' in source
+    assert '"data_loader_seed": 42' in source
+    assert '"checkpoint": {' in source
+    assert '"ref": {' in source
+    assert '"log_prob_max_token_len_per_gpu": 16384' in source
     assert '"val_kwargs": {' in source
     assert '"checkpoint_engine": {' in source
     assert '"update_weights_bucket_megabytes": 2048' in source
