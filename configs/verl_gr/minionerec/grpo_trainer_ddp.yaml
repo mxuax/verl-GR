@@ -3,30 +3,17 @@
 # Uses PyTorch DistributedDataParallel instead of FSDP for faster
 # training on small models.
 #
-# Defaults are inlined from ppo_trainer.yaml instead of using
-# - /ppo_trainer because Hydra cannot resolve ${model_engine}*
-# interpolations when ppo_trainer is included as a defaults entry
-# from a subdirectory config (even with # @package _).
+# Uses /_generated_ppo_trainer (flat yaml, no nested defaults) instead
+# of /ppo_trainer because Hydra cannot resolve ${model_engine}*
+# interpolations when a composition config is included as a defaults
+# entry from a subdirectory config.
 
 hydra:
   searchpath:
     - pkg://verl.trainer.config
 
 defaults:
-  # === Inlined from ppo_trainer.yaml (all absolute; model_engine removed — not needed since
-  #     all ${model_engine}_* interpolations are hardcoded to dp_*) ===
-  - /actor@actor_rollout_ref.actor: dp_actor
-  - /data@data: legacy_data
-  - /ref@actor_rollout_ref.ref: dp_ref
-  - /rollout@actor_rollout_ref.rollout: rollout
-  - /model@actor_rollout_ref.model: hf_model
-  - /critic@critic: dp_critic
-  - /model@critic.model: hf_model
-  - /legacy_reward_impl
-  - /reward@reward: reward
-  - /algorithm@algorithm.rollout_correction: rollout_correction
-  - /distillation@distillation: distillation
-  # === End ppo_trainer defaults ===
+  - /_generated_ppo_trainer
   - _self_
 
 task:
@@ -52,6 +39,21 @@ data:
   seq_title_sample: 10000
   data_source_key: source
   reward_fn_key: source
+
+# Legacy placeholder — required by verl's migrate_legacy_reward_impl.
+# All fields are null so the migration is a no-op (config already uses the new format).
+reward_model:
+  num_workers: null
+  reward_manager: null
+  reward_loop_source: null
+  reward_loop_module_path: null
+  reward_loop_class_name: null
+  enable: null
+  enable_resource_pool: null
+  n_gpus_per_node: null
+  nnodes: null
+  model:
+    path: null
 
 custom_reward_function:
   name: compute_score
