@@ -212,6 +212,7 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"_target_": "verl.workers.config.RolloutConfig"' in source
     assert '"val_kwargs": {' in source
     assert '"checkpoint_engine": {' in source
+    assert '"update_weights_bucket_megabytes": 2048' in source
     assert '"skip": {' in source
     assert '"data",' in source
     assert '"dataloader_num_workers": 8' in source

@@ -398,9 +398,7 @@ def _ensure_runtime_root_blocks(config) -> None:
                     "checkpoint_engine": {
                         "_target_": "verl.workers.config.CheckpointEngineConfig",
                         "backend": "naive",
-                        "wait_timeout": 300.0,
-                        "retry_max_attempts": 10,
-                        "retry_backoff_factor": 2.0,
+                        "update_weights_bucket_megabytes": 2048,
                         "engine_kwargs": {},
                         "custom_backend_module": None,
                     },
