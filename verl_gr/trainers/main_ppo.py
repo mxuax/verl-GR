@@ -30,6 +30,7 @@ from verl_gr.trainers.rl_trainer import RLTrainer
 _CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "verl_gr"
 _PPO_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "verl" / "verl" / "trainer" / "config" / "_generated_ppo_trainer.yaml"
 _SAFE_ROOT_SCHEMA_KEYS = (
+    "global_profiler",
     "transfer_queue",
     "ray_kwargs",
     "distillation",
