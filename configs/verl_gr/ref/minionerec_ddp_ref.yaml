@@ -1,0 +1,12 @@
+defaults:
+  - ddp_ref
+  - _self_
+
+entropy_from_logits_with_chunking: true
+entropy_checkpointing: false
+
+engine_config:
+  forward_only: true
+  model_dtype: bf16
+  use_torch_compile: true
+  seed: 42

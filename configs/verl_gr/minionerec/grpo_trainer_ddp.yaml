@@ -12,9 +12,9 @@ hydra:
     - pkg://verl.trainer.config
 
 defaults:
-  - /actor@actor_rollout_ref.actor: ddp_actor
+  - /actor@actor_rollout_ref.actor: minionerec_ddp_actor
   - /data@data: legacy_data
-  - /ref@actor_rollout_ref.ref: ddp_ref
+  - /ref@actor_rollout_ref.ref: minionerec_ddp_ref
   - /rollout@actor_rollout_ref.rollout: rollout
   - /model@actor_rollout_ref.model: hf_model
   - /critic@critic: dp_critic
@@ -122,38 +122,6 @@ reward:
 actor_rollout_ref:
   hybrid_engine: true
   nccl_timeout: 600
-
-  ref:
-    entropy_from_logits_with_chunking: true
-    entropy_checkpointing: false
-    engine_config:
-      forward_only: true
-      model_dtype: bf16
-      use_torch_compile: true
-      seed: 42
-
-  actor:
-    entropy_from_logits_with_chunking: true
-    entropy_checkpointing: true
-    use_dynamic_bsz: true
-    ppo_mini_batch_size: 8
-    ppo_max_token_len_per_gpu: 40960
-    loss_agg_mode: seq-mean-token-mean
-    use_kl_loss: true
-    kl_loss_coef: 0.001
-    kl_loss_type: low_var_kl
-    policy_loss:
-      loss_mode: minionerec_reinforce
-    engine_config:
-      model_dtype: bf16
-      use_torch_compile: true
-      seed: 42
-    optim:
-      lr: 1e-5
-      lr_warmup_steps_ratio: 0.03
-      weight_decay: 0.0
-      clip_grad: 0.3
-      lr_scheduler_type: cosine
 
   rollout:
     name: constrained_beam

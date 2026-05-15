@@ -173,14 +173,13 @@ def test_yaml_uses_hf_decode_modes():
 def test_ddp_yaml_uses_component_defaults_not_generated_schema():
     source = _read_text("configs/verl_gr/minionerec/grpo_trainer_ddp.yaml")
     assert "/_generated_ppo_trainer" not in source
-    assert "actor@actor_rollout_ref.actor: ddp_actor" in source
-    assert "ref@actor_rollout_ref.ref: ddp_ref" in source
+    assert "actor@actor_rollout_ref.actor: minionerec_ddp_actor" in source
+    assert "ref@actor_rollout_ref.ref: minionerec_ddp_ref" in source
     assert "critic@critic: dp_critic" in source
     assert "sampler:" in source
     assert "reward_model:" in source
-    assert "actor:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" not in source
-    assert "ref:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" not in source
-    assert "engine_config:\n      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" not in source
+    assert "  actor:\n" not in source
+    assert "  ref:\n" not in source
 
 
 def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
@@ -215,6 +214,8 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     actor_source = _read_text("configs/verl_gr/actor/ddp_actor.yaml")
     ref_source = _read_text("configs/verl_gr/ref/ddp_ref.yaml")
     engine_source = _read_text("configs/verl_gr/engine/ddp.yaml")
+    minionerec_actor_source = _read_text("configs/verl_gr/actor/minionerec_ddp_actor.yaml")
+    minionerec_ref_source = _read_text("configs/verl_gr/ref/minionerec_ddp_ref.yaml")
 
     assert "_target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in actor_source
     assert "strategy: ddp" in actor_source
@@ -223,6 +224,10 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     assert "forward_only: true" in ref_source
     assert "_target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in engine_source
     assert "strategy: ddp" in engine_source
+    assert "defaults:\n  - ddp_actor" in minionerec_actor_source
+    assert "loss_mode: minionerec_reinforce" in minionerec_actor_source
+    assert "defaults:\n  - ddp_ref" in minionerec_ref_source
+    assert "forward_only: true" in minionerec_ref_source
 
 
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():

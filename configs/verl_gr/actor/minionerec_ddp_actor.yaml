@@ -1,0 +1,28 @@
+defaults:
+  - ddp_actor
+  - _self_
+
+entropy_from_logits_with_chunking: true
+entropy_checkpointing: true
+use_dynamic_bsz: true
+ppo_mini_batch_size: 8
+ppo_max_token_len_per_gpu: 40960
+loss_agg_mode: seq-mean-token-mean
+use_kl_loss: true
+kl_loss_coef: 0.001
+kl_loss_type: low_var_kl
+
+policy_loss:
+  loss_mode: minionerec_reinforce
+
+engine_config:
+  model_dtype: bf16
+  use_torch_compile: true
+  seed: 42
+
+optim:
+  lr: 1e-5
+  lr_warmup_steps_ratio: 0.03
+  weight_decay: 0.0
+  clip_grad: 0.3
+  lr_scheduler_type: cosine
