@@ -178,6 +178,10 @@ def test_ddp_yaml_uses_component_defaults_not_generated_schema():
     assert "critic@critic: dp_critic" in source
     assert "sampler:" in source
     assert "reward_model:" in source
+    assert "actor:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in source
+    assert "actor:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig\n    strategy: ddp" in source
+    assert "ref:\n    _target_: verl_gr.workers.config.ddp_engine.DDPActorConfig" in source
+    assert "engine_config:\n      _target_: verl_gr.workers.config.ddp_engine.DDPEngineConfig" in source
 
 
 def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
