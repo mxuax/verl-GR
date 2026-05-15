@@ -169,7 +169,7 @@ echo "==================================="
   ++task.name="${TASK_NAME}" \
   ++task.class_path="${TASK_CLASS_PATH}" \
   ++task.trainer_adapter_class="verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter" \
-  reward.num_workers="${REWARD_NUM_WORKERS}" \
+  +reward.num_workers="${REWARD_NUM_WORKERS}" \
   data.train_files="[${TRAIN_FILE}]" \
   data.val_files="[${VAL_FILE}]" \
   data.custom_cls.name="MiniOneRecDataset" \
