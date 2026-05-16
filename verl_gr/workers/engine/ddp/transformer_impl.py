@@ -165,6 +165,60 @@ class DDPEngine(FSDPEngine):
     # Overrides — model wrapping
     # ------------------------------------------------------------------
 
+    def _build_module(self):
+        """Load a full HF model replica on every DDP rank.
+
+        The FSDP implementation initializes non-zero ranks with meta tensors
+        and materializes them during FSDP wrapping. DDP has no such
+        materialization step, so every rank must call ``from_pretrained`` with
+        real tensors before wrapping.
+        """
+        import warnings
+
+        from verl.models.transformers.monkey_patch import apply_monkey_patch
+        from verl.utils.model import get_hf_auto_model_class
+        from verl.utils.torch_dtypes import PrecisionType
+
+        torch_dtype = self.engine_config.model_dtype
+        if torch_dtype is None:
+            torch_dtype = torch.float32 if not self.engine_config.forward_only else torch.bfloat16
+        torch_dtype = PrecisionType.to_dtype(torch_dtype)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+
+            auto_class = get_hf_auto_model_class(hf_config=self.model_config.hf_config)
+            module = auto_class.from_pretrained(
+                pretrained_model_name_or_path=self.model_config.local_path,
+                torch_dtype=torch_dtype,
+                config=self.model_config.hf_config,
+                trust_remote_code=self.model_config.trust_remote_code,
+            )
+
+            if self.model_config.use_liger:
+                from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
+
+                _apply_liger_kernel_to_instance(model=module)
+
+            fused_kernel_options = self.model_config.fused_kernel_options
+            fused_kernels_backend = (
+                fused_kernel_options.get("impl_backend", None) if fused_kernel_options is not None else None
+            )
+            apply_monkey_patch(
+                model=module,
+                use_remove_padding=self.use_remove_padding,
+                ulysses_sp_size=self.ulysses_sequence_parallel_size,
+                use_fused_kernels=self.model_config.use_fused_kernels,
+                fused_kernels_backend=fused_kernels_backend,
+            )
+
+            module.to(torch_dtype)
+
+            if self.model_config.enable_gradient_checkpointing:
+                module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+
+        return module
+
     def _build_ddp_module(self, module: torch.nn.Module) -> torch.nn.Module:
         """Wrap the HF model with DistributedDataParallel."""
         from verl.utils.activation_offload import enable_activation_offloading

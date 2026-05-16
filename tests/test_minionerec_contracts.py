@@ -298,6 +298,17 @@ def test_ddp_engine_normalizes_optimizer_config_to_fsdp_dataclass():
     assert "isinstance(optimizer_config, FSDPOptimizerConfig)" in source
 
 
+def test_ddp_engine_loads_real_model_on_every_rank():
+    source = _read_text("verl_gr/workers/engine/ddp/transformer_impl.py")
+    module = ast.parse(source)
+    engine_cls = _get_class(module, "DDPEngine")
+    method = _get_method(engine_cls, "_build_module")
+    segment = ast.get_source_segment(source, method) or ""
+    assert "from_pretrained" in segment
+    assert "get_init_weight_context_manager" not in segment
+    assert "init_empty_weights" not in segment
+
+
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
     source = _read_text("verl_gr/recipes/task_runtime.py")
     assert "def _infer_role_strategy(" in source
