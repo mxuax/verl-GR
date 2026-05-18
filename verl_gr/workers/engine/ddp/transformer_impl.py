@@ -39,11 +39,12 @@ device_name = get_device_name()
 class _SimpleCheckpointManager:
     """Minimal checkpoint manager for DDP (full state dicts, no sharding)."""
 
-    def __init__(self, model, optimizer, lr_scheduler, checkpoint_config, **_kwargs):
+    def __init__(self, model, optimizer, lr_scheduler, checkpoint_config, model_config_path=None, **_kwargs):
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.checkpoint_config = checkpoint_config
+        self._model_config_path = model_config_path  # base HF model path for config export
 
     def save_checkpoint(self, *, local_path, hdfs_path=None, global_step=0, max_ckpt_to_keep=None, **_kwargs):
         os.makedirs(local_path, exist_ok=True)
@@ -51,13 +52,42 @@ class _SimpleCheckpointManager:
         # Unwrap DDP to get the raw model
         model = self.model.module if isinstance(self.model, DDP) else self.model
         if rank == 0:
+            # Raw state_dict for resuming training
             torch.save(model.state_dict(), os.path.join(local_path, "model.pt"))
             if self.optimizer is not None:
                 torch.save(self.optimizer.state_dict(), os.path.join(local_path, "optimizer.pt"))
             if self.lr_scheduler is not None:
                 torch.save(self.lr_scheduler.state_dict(), os.path.join(local_path, "lr_scheduler.pt"))
             torch.save({"global_step": global_step}, os.path.join(local_path, "extra.pt"))
+            # Also export HF format for evaluation (eval_compare_ckpts.py etc.)
+            self._export_hf(model, local_path)
         torch.distributed.barrier()
+
+    def _export_hf(self, model, local_path):
+        """Export the raw HF model as a HuggingFace checkpoint.
+
+        Writes ``huggingface/`` subdirectory with ``config.json``, weights,
+        and tokenizer files so that ``AutoModelForCausalLM.from_pretrained``
+        and downstream eval scripts can load the checkpoint directly.
+        """
+        hf_dir = os.path.join(local_path, "huggingface")
+        os.makedirs(hf_dir, exist_ok=True)
+        try:
+            model.save_pretrained(hf_dir)
+            logger.info("Exported HF checkpoint to %s", hf_dir)
+        except Exception:
+            logger.warning("Failed to save HF checkpoint to %s", hf_dir, exc_info=True)
+        # Copy tokenizer files from the base model if available
+        base_model = self._model_config_path
+        if base_model and os.path.isdir(base_model):
+            import shutil
+            for fname in os.listdir(base_model):
+                src = os.path.join(base_model, fname)
+                if not os.path.isfile(src):
+                    continue
+                if fname.startswith("tokenizer") or fname == "vocab.json" or fname == "merges.txt" or fname == "special_tokens_map.json" or fname == "added_tokens.json":
+                    shutil.copy2(src, hf_dir)
+                    logger.info("Copied %s to HF checkpoint", fname)
 
     def load_checkpoint(self, *, local_path, hdfs_path=None, del_local_after_load=True, **_kwargs):
         model = self.model.module if isinstance(self.model, DDP) else self.model
@@ -269,6 +299,7 @@ class DDPEngine(FSDPEngine):
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
             checkpoint_config=self.checkpoint_config,
+            model_config_path=self.model_config.local_path or self.model_config.path,
         )
         from verl.utils.debug import log_gpu_memory_usage
         log_gpu_memory_usage("After DDP initialize", logger=logger)

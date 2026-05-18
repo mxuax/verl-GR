@@ -322,7 +322,7 @@ class RLTrainer(RayPPOTrainerBase):
         freq = _cfg_get(_cfg_get(self.config.actor_rollout_ref, "ref"), "sync_freq")
         if freq is None:
             rollout = str(self.config.actor_rollout_ref.rollout.get("name", ""))
-            freq = 1 if rollout == "constrained_beam" else 0
+            freq = 512 if rollout == "constrained_beam" else 0
         freq = int(freq)
         if freq <= 0 or self.global_steps % freq != 0:
             return
