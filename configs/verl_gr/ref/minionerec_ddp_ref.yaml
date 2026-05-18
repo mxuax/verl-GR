@@ -2,6 +2,12 @@ defaults:
   - ddp_ref
   - _self_
 
+# TRL SyncRefModelCallback defaults: EMA mixup every 512 steps.
+# alpha=0.6 → ref = 0.6 * ref + 0.4 * actor (soft tracking).
+# Set to 0 for hard copy, 1 for frozen ref.
+sync_freq: 512
+ref_model_mixup_alpha: 0.6
+
 entropy_from_logits_with_chunking: true
 entropy_checkpointing: false
 
