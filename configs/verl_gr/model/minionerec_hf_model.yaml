@@ -2,7 +2,7 @@ defaults:
   - hf_model
   - _self_
 
-enable_activation_offload: true
+enable_activation_offload: false
 enable_gradient_checkpointing: true
 use_remove_padding: true
 use_fused_kernels: false
