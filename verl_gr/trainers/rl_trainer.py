@@ -309,6 +309,30 @@ class RLTrainer(RayPPOTrainerBase):
         if expected_lr is not None:
             metrics["actor/lr"] = expected_lr
 
+    def _compute_old_log_prob(self, batch: DataProto):
+        """Override to skip old_log_prob forward pass for REINFORCE loss.
+
+        The minionerec_reinforce loss does not use old_log_probs in its gradient
+        (only for the ppo_kl metric), and use_kl_in_reward is false for minionerec.
+        This saves one full actor inference per step (~20% training time).
+        """
+        policy_loss_config = _cfg_get(self.config.actor_rollout_ref.actor, "policy_loss")
+        loss_mode = _cfg_get(policy_loss_config, "loss_mode", "")
+        if loss_mode != "minionerec_reinforce":
+            return super()._compute_old_log_prob(batch)
+
+        # For REINFORCE, return zero-filled tensors since old_log_probs are unused.
+        # response_mask determines the valid token positions.
+        if "response_mask" not in batch.batch:
+            batch.batch["response_mask"] = compute_response_mask(batch)
+        response_mask = batch.batch["response_mask"]
+        log_probs = torch.zeros_like(response_mask, dtype=torch.float32)
+        entropy = torch.zeros_like(response_mask, dtype=torch.float32)
+
+        old_log_prob_td = tu.get_tensordict({"old_log_probs": log_probs, "entropys": entropy})
+        old_log_prob = DataProto.from_tensordict(old_log_prob_td)
+        return old_log_prob, 0.0
+
     def _update_actor(self, batch: DataProto) -> DataProto:
         actor_output = super()._update_actor(batch)
         self._add_actor_lr_metrics(actor_output.meta_info["metrics"])

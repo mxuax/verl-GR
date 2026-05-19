@@ -108,10 +108,13 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         my_prompt_indices = list(range(rank, len(prompts), world_size))
         my_prompts = [prompts[i] for i in my_prompt_indices]
 
-        # Cache tokenizer on first call (FSDP workers persist across steps)
+        # Cache tokenizer and generator on first call (FSDP workers persist across steps).
+        # The hash_dict (prefix-trie) is expensive to build — cache it keyed by info_file
+        # so we rebuild only when the constraint file changes.
         if not hasattr(self, "_hf_cached_tokenizer"):
             model_path = self.config.model.path
             self._hf_cached_tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            self._hf_cached_generators: dict[str, HfConstrainedBeamGenerator] = {}
 
         tokenizer = self._hf_cached_tokenizer
         actor_module = self.actor.engine.module
@@ -123,16 +126,22 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         temperature = float(meta_info.get("temperature", 1.0))
         max_new_tokens = int(meta_info.get("max_new_tokens", 128))
         is_validate = bool(meta_info.get("validate", False))
+        val_beam_width = int(meta_info.get("val_beam_width", beam_width))
+        hf_micro_batch_size = int(meta_info.get("hf_micro_batch_size", 16))
 
-        gen = HfConstrainedBeamGenerator(
-            info_file=info_file,
-            tokenizer=tokenizer,
-            beam_width=beam_width,
-            val_beam_width=int(meta_info.get("val_beam_width", beam_width)),
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            micro_batch_size=int(meta_info.get("hf_micro_batch_size", 16)),
-        )
+        cache_key = f"{info_file}|{beam_width}|{val_beam_width}|{max_new_tokens}|{temperature}|{hf_micro_batch_size}"
+        gen = self._hf_cached_generators.get(cache_key)
+        if gen is None:
+            gen = HfConstrainedBeamGenerator(
+                info_file=info_file,
+                tokenizer=tokenizer,
+                beam_width=beam_width,
+                val_beam_width=val_beam_width,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                micro_batch_size=hf_micro_batch_size,
+            )
+            self._hf_cached_generators[cache_key] = gen
 
         prompt_token_ids = meta_info.get("prompt_token_ids")
         if prompt_token_ids is not None:
