@@ -51,7 +51,9 @@ export REWARD_NUM_WORKERS="${REWARD_NUM_WORKERS:-1}"
 export CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"
 
 # 与 rl.sh 数值对齐
-export TRAIN_BATCH_SIZE=64
+# 与原仓对齐：32 unique prompts × 16 beams = 512 completions/update
+# 原仓: 64 completions/GPU × 4 GPUs × 2 grad_accum / 16 generations = 32 prompts/update
+export TRAIN_BATCH_SIZE=32
 export PPO_MICRO_BATCH_PER_GPU=2
 export TOTAL_EPOCHS=2
 export BEAM_WIDTH=16
