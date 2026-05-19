@@ -176,7 +176,16 @@ class HfConstrainedBeamGenerator:
                 # prompt; using prompt_len would include real prompt tokens in the
                 # completion.  Mirrors evaluate.py: sequences[:, maxLen:].
                 gen_ids = seqs[seq_idx, padded_input_len:].tolist()
-                clean_ids = [tid for tid in gen_ids if tid != self._pad_token_id]
+                # Keep up to (including) first EOS, matching original MiniOneRec
+                # where ``completion_mask = (seq_idx <= eos_idx)``.
+                # HF beam search pads with pad_token_id which equals eos_token_id
+                # for Qwen2; stripping all of them turns "first token EOS" into
+                # an empty response → response_mask=0 → no policy/KL gradient.
+                if self._eos_token_id in gen_ids:
+                    eos_pos = gen_ids.index(self._eos_token_id)
+                    clean_ids = gen_ids[:eos_pos + 1]
+                else:
+                    clean_ids = gen_ids
                 completions.append(clean_ids)
             decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
             # Prompt tokens: slice from the RIGHT side of the padded input,
