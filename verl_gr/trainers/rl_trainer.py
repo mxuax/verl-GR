@@ -316,8 +316,27 @@ class RLTrainer(RayPPOTrainerBase):
         (only for the ppo_kl metric), and use_kl_in_reward is false for minionerec.
         This saves one full actor inference per step (~20% training time).
         """
-        policy_loss_config = _cfg_get(self.config.actor_rollout_ref.actor, "policy_loss")
-        loss_mode = _cfg_get(policy_loss_config, "loss_mode", "")
+        # Detect loss_mode from config — try multiple access paths since the
+        # config may be either an OmegaConf DictConfig or a structured dataclass.
+        actor_cfg = self.config.actor_rollout_ref.actor
+        loss_mode = ""
+        try:
+            # OmegaConf DictConfig path
+            if hasattr(actor_cfg, "policy_loss"):
+                pl = actor_cfg.policy_loss
+                if hasattr(pl, "loss_mode"):
+                    loss_mode = pl.loss_mode
+                elif hasattr(pl, "get"):
+                    loss_mode = pl.get("loss_mode", "")
+            elif hasattr(actor_cfg, "get"):
+                pl = actor_cfg.get("policy_loss", {})
+                if hasattr(pl, "get"):
+                    loss_mode = pl.get("loss_mode", "")
+                elif hasattr(pl, "loss_mode"):
+                    loss_mode = pl.loss_mode
+        except Exception:
+            loss_mode = ""
+
         if loss_mode != "minionerec_reinforce":
             return super()._compute_old_log_prob(batch)
 
