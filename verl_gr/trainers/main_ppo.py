@@ -825,6 +825,11 @@ def _build_main():
         def __init__(self):
             super().__init__()
 
+        def add_ref_policy_worker(self, config, ref_policy_cls):
+            if need_reference_policy(config) and Role.ActorRolloutRef in self.role_worker_mapping:
+                return
+            return super().add_ref_policy_worker(config, ref_policy_cls)
+
         def run(self, config):
             task_impl = _select_task(config)
             task_impl.sanitize_fsdp2_wrap_policy(config)
