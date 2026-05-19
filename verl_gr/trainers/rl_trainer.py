@@ -338,7 +338,16 @@ class RLTrainer(RayPPOTrainerBase):
             loss_mode = ""
 
         if loss_mode != "minionerec_reinforce":
+            if not getattr(self, "_old_log_prob_losswarned", False):
+                print(f"[RLTrainer._compute_old_log_prob] loss_mode={loss_mode!r} "
+                      f"-> using parent forward pass (expected 'minionerec_reinforce')", flush=True)
+                self._old_log_prob_losswarned = True
             return super()._compute_old_log_prob(batch)
+
+        if not getattr(self, "_old_log_prob_bypass_logged", False):
+            print("[RLTrainer._compute_old_log_prob] REINFORCE bypass active — "
+                  "old_log_prob set to zeros, saving one forward pass per step.", flush=True)
+            self._old_log_prob_bypass_logged = True
 
         # For REINFORCE, return zero-filled tensors since old_log_probs are unused.
         # response_mask determines the valid token positions.

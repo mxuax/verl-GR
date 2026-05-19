@@ -132,6 +132,10 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         cache_key = f"{info_file}|{beam_width}|{val_beam_width}|{max_new_tokens}|{temperature}|{hf_micro_batch_size}"
         gen = self._hf_cached_generators.get(cache_key)
         if gen is None:
+            if not getattr(self, "_hf_gen_build_logged", False):
+                print(f"[hf_constrained_beam_generate] Building HfConstrainedBeamGenerator "
+                      f"(info_file={info_file}, cache_key={cache_key[:80]}...)", flush=True)
+                self._hf_gen_build_logged = True
             gen = HfConstrainedBeamGenerator(
                 info_file=info_file,
                 tokenizer=tokenizer,
