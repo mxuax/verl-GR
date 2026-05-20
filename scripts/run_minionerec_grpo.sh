@@ -221,6 +221,11 @@ echo "==================================="
   ++actor_rollout_ref.actor.ppo_mini_batch_size="${TRAIN_BATCH_SIZE}" \
   ++actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
   ++actor_rollout_ref.actor.policy_loss.loss_mode=minionerec_reinforce \
+  ++actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
+  ++actor_rollout_ref.actor.optim.lr_scheduler_type=cosine \
+  ++actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.03 \
+  ++actor_rollout_ref.actor.optim.clip_grad=0.3 \
+  ++actor_rollout_ref.actor.optim.weight_decay=0.0 \
   ++actor_rollout_ref.actor.use_kl_loss=True \
   ++actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
   ++actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \

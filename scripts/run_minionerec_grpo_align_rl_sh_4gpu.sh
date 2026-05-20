@@ -86,6 +86,11 @@ bash scripts/run_minionerec_grpo.sh \
   ++data.filter_overlong_prompts=false \
   ++data.truncation=left \
   ++actor_rollout_ref.actor.policy_loss.loss_mode=minionerec_reinforce \
+  ++actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
+  ++actor_rollout_ref.actor.optim.lr_scheduler_type=cosine \
+  ++actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.03 \
+  ++actor_rollout_ref.actor.optim.clip_grad=0.3 \
+  ++actor_rollout_ref.actor.optim.weight_decay=0.0 \
   ++actor_rollout_ref.actor.kl_loss_coef=0.001 \
   ++actor_rollout_ref.actor.use_dynamic_bsz=true \
   ++actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
