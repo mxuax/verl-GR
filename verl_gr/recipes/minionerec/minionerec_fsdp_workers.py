@@ -154,7 +154,7 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         actor_module.eval()
         param_ctx = contextlib.nullcontext()
         if isinstance(actor_module, FSDP):
-            param_ctx = FSDP.summon_full_params(actor_module, writeback=False, recurse=False)
+            param_ctx = FSDP.summon_full_params(actor_module, writeback=False)
 
         with param_ctx, torch.inference_mode():
             if do_sample and not is_validate:
