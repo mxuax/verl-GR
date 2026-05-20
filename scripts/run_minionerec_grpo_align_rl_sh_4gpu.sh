@@ -85,6 +85,7 @@ bash scripts/run_minionerec_grpo.sh \
   ++trainer.test_freq=165 \
   ++data.filter_overlong_prompts=false \
   ++data.truncation=left \
+  ++actor_rollout_ref.actor.policy_loss.loss_mode=minionerec_reinforce \
   ++actor_rollout_ref.actor.kl_loss_coef=0.001 \
   ++actor_rollout_ref.actor.use_dynamic_bsz=true \
   ++actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \

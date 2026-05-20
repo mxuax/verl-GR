@@ -315,13 +315,15 @@ class RLTrainer(RayPPOTrainerBase):
         The minionerec_reinforce loss does not use old_log_probs in its gradient
         (only for the ppo_kl metric), and use_kl_in_reward is false for minionerec.
         This saves one full actor inference per step (~20% training time).
+
+        Only activates when the ACTUAL composed config has
+        ``policy_loss.loss_mode == "minionerec_reinforce"`` — never bypass based
+        on rollout name alone, because vanilla PPO requires correct old_log_probs
+        for the importance ratio exp(logp - old_logp).
         """
-        # Detect loss_mode from config — try multiple access paths since the
-        # config may be either an OmegaConf DictConfig or a structured dataclass.
         actor_cfg = self.config.actor_rollout_ref.actor
         loss_mode = ""
         try:
-            # OmegaConf DictConfig path
             if hasattr(actor_cfg, "policy_loss"):
                 pl = actor_cfg.policy_loss
                 if hasattr(pl, "loss_mode"):
@@ -340,13 +342,14 @@ class RLTrainer(RayPPOTrainerBase):
         if loss_mode != "minionerec_reinforce":
             if not getattr(self, "_old_log_prob_losswarned", False):
                 print(f"[RLTrainer._compute_old_log_prob] loss_mode={loss_mode!r} "
-                      f"-> using parent forward pass (expected 'minionerec_reinforce')", flush=True)
+                      f"-> using parent forward pass", flush=True)
                 self._old_log_prob_losswarned = True
             return super()._compute_old_log_prob(batch)
 
         if not getattr(self, "_old_log_prob_bypass_logged", False):
-            print("[RLTrainer._compute_old_log_prob] REINFORCE bypass active — "
-                  "old_log_prob set to zeros, saving one forward pass per step.", flush=True)
+            print("[RLTrainer._compute_old_log_prob] loss_mode='minionerec_reinforce' — "
+                  "old_log_prob bypass active (zero-filled, saving one forward pass per step).",
+                  flush=True)
             self._old_log_prob_bypass_logged = True
 
         # For REINFORCE, return zero-filled tensors since old_log_probs are unused.

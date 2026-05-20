@@ -220,6 +220,7 @@ echo "==================================="
   ++actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   ++actor_rollout_ref.actor.ppo_mini_batch_size="${TRAIN_BATCH_SIZE}" \
   ++actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
+  ++actor_rollout_ref.actor.policy_loss.loss_mode=minionerec_reinforce \
   ++actor_rollout_ref.actor.use_kl_loss=True \
   ++actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
   ++actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
