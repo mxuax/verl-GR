@@ -640,6 +640,20 @@ class RLTrainer(RayPPOTrainerBase):
                 if key not in reward_extra_keys:
                     reward_extra_keys.append(key)
             reward_batch.meta_info["reward_extra_keys"] = reward_extra_keys
+
+            # Compute per-step scalar reward metrics for wandb logging.
+            # The parent framework only logs generic critic/score/mean and
+            # critic/rewards/mean; these add MiniOneRec-specific breakdowns.
+            reward_metrics = {}
+            for key, values in reward_extra_info.items():
+                try:
+                    arr = np.asarray(values, dtype=np.float64)
+                    reward_metrics[f"minionerec/{key}/mean"] = float(arr.mean())
+                except (ValueError, TypeError):
+                    pass
+            existing = reward_batch.meta_info.get("metrics", {})
+            existing.update(reward_metrics)
+            reward_batch.meta_info["metrics"] = existing
         return reward_batch
 
     def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
