@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 import logging
 
+import ray
 import torch
 
 from verl import DataProto
@@ -183,9 +184,24 @@ class TwoStagevLLMRollout(ServerAdapter):
         await super().resume(tags=tags)
 
     async def update_weights(self, weights, global_steps: int = None, **kwargs):
-        """Delegate weight sync to ServerAdapter async transport."""
-        await super().update_weights(weights=weights, global_steps=global_steps, **kwargs)
+        """Abort two-stage requests before syncing weights through ServerAdapter."""
+        await self._execute_server_method("abort_all_requests", reset_prefix_cache=True)
+        try:
+            await super().update_weights(weights=weights, global_steps=global_steps, **kwargs)
+        finally:
+            await self._execute_server_method("resume_generation")
 
     async def release(self):
         """Lifecycle hook required by BaseRollout in verl>=0.7.x."""
         await super().release()
+
+    async def _execute_server_method(self, method: str, **kwargs):
+        """Call a method on the Ray server actor, not on vLLM engine workers."""
+        if self.rollout_rank != 0:
+            return None
+
+        if self.server_handle is None:
+            prefix = self._get_server_name_prefix()
+            self.server_handle = ray.get_actor(f"{prefix}server_{self.replica_rank}_{self.node_rank}")
+
+        return await getattr(self.server_handle, method).remote(**kwargs)

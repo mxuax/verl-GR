@@ -43,6 +43,15 @@ def _extract_output_log_probs(output, token_ids: list[int]) -> Optional[list[flo
     return [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(output.logprobs)]
 
 
+async def _drain_final_request_output(generator: Any) -> Optional[RequestOutput]:
+    final_res: Optional[RequestOutput] = None
+    while True:
+        try:
+            final_res = await generator.__anext__()
+        except StopAsyncIteration:
+            return final_res
+
+
 class TwoStagevLLMHttpServer(vLLMHttpServer):
     """Serve one stage-1 sample and reuse its stage-2 beams across async calls."""
 
@@ -51,12 +60,39 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._two_stage_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        self._two_stage_inflight: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._two_stage_build_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
         # vLLM V1 can become unstable when too many short-lived async requests hit the
         # engine core at once. Two-stage beam search multiplies request fan-out, so we
-        # cap in-flight subrequests per server to keep IPC pressure bounded.
-        beam_parallelism = int(get_rollout_custom_value(self.config, "beam_subrequest_parallelism", 8))
-        self._two_stage_request_semaphore = asyncio.Semaphore(max(1, beam_parallelism))
+        # cap in-flight engine requests per server to keep IPC pressure bounded.
+        max_inflight_requests = int(
+            get_rollout_custom_value(
+                self.config,
+                "two_stage_max_inflight_requests",
+                get_rollout_custom_value(self.config, "beam_subrequest_parallelism", 8),
+            )
+        )
+        self._two_stage_engine_request_semaphore = asyncio.Semaphore(max(1, max_inflight_requests))
+
+    async def abort_all_requests(self, reset_prefix_cache: bool = True) -> dict[str, Any]:
+        """Abort vLLM requests and clear two-stage state kept outside vLLM."""
+        build_tasks = list(self._two_stage_build_tasks.values())
+        cancelled_count = 0
+        for task in build_tasks:
+            if not task.done():
+                task.cancel()
+                cancelled_count += 1
+
+        if build_tasks:
+            await asyncio.gather(*build_tasks, return_exceptions=True)
+
+        self._two_stage_build_tasks.clear()
+        cleared_cache_entries = len(self._two_stage_cache)
+        self._two_stage_cache.clear()
+
+        result = await super().abort_all_requests(reset_prefix_cache=reset_prefix_cache)
+        result["two_stage_cancelled_build_tasks"] = cancelled_count
+        result["two_stage_cleared_cache_entries"] = cleared_cache_entries
+        return result
 
     async def generate(
         self,
@@ -246,9 +282,9 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         if cached is not None:
             return cached
 
-        inflight = self._two_stage_inflight.get(cache_key)
-        if inflight is None:
-            inflight = asyncio.create_task(
+        build_task = self._two_stage_build_tasks.get(cache_key)
+        if build_task is None:
+            build_task = asyncio.create_task(
                 self._build_two_stage_cache_entry(
                     prompt_ids=prompt_ids,
                     sampling_params=sampling_params,
@@ -259,14 +295,14 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
                     beam_config=beam_config,
                 )
             )
-            self._two_stage_inflight[cache_key] = inflight
-            inflight.add_done_callback(
-                lambda finished_task, key=cache_key: self._two_stage_inflight.pop(key, None)
-                if self._two_stage_inflight.get(key) is finished_task
+            self._two_stage_build_tasks[cache_key] = build_task
+            build_task.add_done_callback(
+                lambda finished_task, key=cache_key: self._two_stage_build_tasks.pop(key, None)
+                if self._two_stage_build_tasks.get(key) is finished_task
                 else None
             )
 
-        cache_entry = await inflight
+        cache_entry = await build_task
         existing = self._two_stage_cache.get(cache_key)
         if existing is not None:
             return existing
@@ -327,7 +363,8 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
         lora_request: Optional[LoRARequest],
         priority: int,
     ) -> RequestOutput:
-        async with self._two_stage_request_semaphore:
+        await self._two_stage_engine_request_semaphore.acquire()
+        try:
             generator = self.engine.generate(
                 prompt=prompt,
                 sampling_params=sampling_params,
@@ -335,23 +372,23 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
                 lora_request=lora_request,
                 priority=priority,
             )
-            final_res: Optional[RequestOutput] = None
-            async for output in generator:
-                final_res = output
+            final_res = await _drain_final_request_output(generator)
             assert final_res is not None
             return final_res
+        finally:
+            self._two_stage_engine_request_semaphore.release()
 
     async def _build_lora_request(self) -> Optional[LoRARequest]:
-        if not self.lora_as_adapter:
-            return None
-        lora_loaded = VLLM_LORA_INT_ID in await self.engine.list_loras()
-        if not lora_loaded:
-            return None
-        return LoRARequest(
-            lora_name=VLLM_LORA_NAME,
-            lora_int_id=VLLM_LORA_INT_ID,
-            lora_path=VLLM_LORA_PATH,
-        )
+        if self.lora_as_adapter:
+            loaded_loras = None
+            loaded_loras = await self.engine.list_loras()
+            if VLLM_LORA_INT_ID in loaded_loras:
+                return LoRARequest(
+                    lora_name=VLLM_LORA_NAME,
+                    lora_int_id=VLLM_LORA_INT_ID,
+                    lora_path=VLLM_LORA_PATH,
+                )
+        return None
 
     def _trim_two_stage_cache(self) -> None:
         while len(self._two_stage_cache) > self._MAX_TWO_STAGE_CACHE_SIZE:
