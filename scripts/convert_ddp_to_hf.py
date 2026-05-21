@@ -18,7 +18,8 @@ Usage:
         --base_model /path/to/Qwen2-0.5B \\
         --batch
 
-The output goes to ``<ckpt>/huggingface/`` by default.
+The output goes to ``<ckpt>/huggingface/`` by default.  In batch mode,
+omit ``--output`` so each checkpoint writes into its own actor directory.
 """
 
 from __future__ import annotations
@@ -94,12 +95,19 @@ def main():
     )
     parser.add_argument("--ckpt", required=True, help="Path to checkpoint directory (or parent dir with --batch)")
     parser.add_argument("--base_model", required=True, help="Path to base HuggingFace model")
-    parser.add_argument("--output", default=None, help="Output directory (default: <ckpt>/huggingface)")
+    parser.add_argument("--output", default=None,
+                        help="Output directory for a single checkpoint (default: <ckpt>/huggingface)")
     parser.add_argument("--batch", action="store_true",
                         help="Batch convert all global_step_*/actor subdirs under --ckpt")
     args = parser.parse_args()
 
     if args.batch:
+        if args.output is not None:
+            parser.error(
+                "--output cannot be used with --batch because a single output directory "
+                "would be overwritten by each checkpoint; omit --output to write each "
+                "checkpoint to its own <actor>/huggingface directory."
+            )
         ckpt_root = Path(args.ckpt)
         actor_dirs = sorted(ckpt_root.glob("global_step_*/actor"))
         if not actor_dirs:
@@ -108,7 +116,7 @@ def main():
         print(f"Found {len(actor_dirs)} actor checkpoint(s)")
         for d in actor_dirs:
             try:
-                convert_one(str(d), args.base_model, args.output)
+                convert_one(str(d), args.base_model)
             except Exception as e:
                 print(f"[error] {d}: {e}")
     else:

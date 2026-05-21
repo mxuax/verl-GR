@@ -298,6 +298,13 @@ def test_ddp_engine_normalizes_optimizer_config_to_fsdp_dataclass():
     assert "isinstance(optimizer_config, FSDPOptimizerConfig)" in source
 
 
+def test_ddp_to_hf_batch_mode_rejects_shared_output_dir():
+    source = _read_text("scripts/convert_ddp_to_hf.py")
+    assert "--output cannot be used with --batch" in source
+    assert "convert_one(str(d), args.base_model)" in source
+    assert "convert_one(str(d), args.base_model, args.output)" not in source
+
+
 def test_task_runtime_infers_strategy_without_direct_actor_attr_reads():
     source = _read_text("verl_gr/recipes/task_runtime.py")
     assert "def _infer_role_strategy(" in source
