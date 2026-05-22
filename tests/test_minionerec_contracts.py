@@ -317,3 +317,13 @@ def test_minionerec_worker_does_not_require_direct_actor_strategy_attr():
 def test_openonerec_yaml_has_stage2_decode_mode():
     source = _read_text("configs/verl_gr/openonerec/grpo_trainer.yaml")
     assert "stage2_decode_mode: vllm_native_beam" in source
+
+
+def test_eval_compare_table_averages_metric_lists():
+    source = _read_text("scripts/eval_compare_ckpts.py")
+    module = ast.parse(source)
+    _get_method(module, "_mean_metric_values")
+    assert "_mean_metric_values(results1, k)" in source
+    assert "_mean_metric_values(results2, k)" in source
+    assert "results1.get(k, [0])[0]" not in source
+    assert "results2.get(k, [0])[0]" not in source
