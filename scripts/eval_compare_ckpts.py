@@ -291,6 +291,17 @@ def compute_metrics(completions: list[str], target: str, ks: list[int] = (3, 5, 
     return results
 
 
+def _mean_metric_value(values) -> float:
+    """Return the dataset-level mean for per-sample metric lists."""
+    if values is None:
+        return 0.0
+    if isinstance(values, (int, float, np.number)):
+        return float(values)
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
 # =============================================================================
 # Checkpoint loading
 # =============================================================================
@@ -531,10 +542,8 @@ def main():
         print("-" * 56)
         for k in ("HR@3", "NDCG@3", "HR@5", "NDCG@5", "HR@10", "NDCG@10",
                   "eos_only_ratio", "empty_decoded_ratio", "mean_resp_len"):
-            v1 = results1.get(k, [0])[0] if k in results1 else sum(results1.get(k, [0])) / max(1, len(results1.get(k, [])))
-            v2 = results2.get(k, [0])[0] if k in results2 else sum(results2.get(k, [0])) / max(1, len(results2.get(k, [])))
-            if isinstance(v1, list): v1 = sum(v1) / max(1, len(v1))
-            if isinstance(v2, list): v2 = sum(v2) / max(1, len(v2))
+            v1 = _mean_metric_value(results1.get(k, []))
+            v2 = _mean_metric_value(results2.get(k, []))
             delta = v1 - v2
             print(f"{k:20s} | {v1:10.4f} | {v2:10.4f} | {delta:+10.4f}")
 
@@ -544,9 +553,7 @@ def main():
         from datetime import datetime as _dt
 
         def _summarize(r):
-            return {k: (v[0] if isinstance(v, list) and len(v) == 1 else
-                        sum(v) / len(v) if v else 0.0)
-                    for k, v in r.items()}
+            return {k: _mean_metric_value(v) for k, v in r.items()}
 
         payload = {
             "timestamp": _dt.now().isoformat(),
