@@ -41,7 +41,8 @@ class MiniOneRecTrainerAdapter(TrainerTaskAdapter):
         if "responses" not in batch.batch or "reward_model" not in batch.non_tensor_batch:
             return reward_batch, {}
 
-        completions = [normalize_sid(trainer.tokenizer.decode(ids, skip_special_tokens=True)) for ids in batch.batch["responses"]]
+        response_token_ids = self._valid_response_token_ids(batch, trainer.tokenizer.pad_token_id)
+        completions = [normalize_sid(trainer.tokenizer.decode(ids, skip_special_tokens=True)) for ids in response_token_ids]
         targets = [normalize_sid(item.get("ground_truth", "")) for item in batch.non_tensor_batch["reward_model"]]
         group_keys = self._group_keys(batch)
         rule_rewards = np.array([float(pred == target and target != "") for pred, target in zip(completions, targets, strict=True)])
@@ -271,10 +272,25 @@ class MiniOneRecTrainerAdapter(TrainerTaskAdapter):
         return [idx for idx in range(len(batch))]
 
     @staticmethod
-    def _write_sequence_rewards(batch, reward_tensor, sequence_rewards, pad_token_id: int):
-        rewritten = torch.zeros_like(reward_tensor)
+    def _response_attention_mask(batch, pad_token_id: int | None):
         responses = batch.batch["responses"]
-        response_mask = responses != pad_token_id
+        attention_mask = batch.batch.get("attention_mask")
+        if attention_mask is not None and attention_mask.shape[-1] >= responses.shape[-1]:
+            return attention_mask[:, -responses.shape[-1]:].to(dtype=torch.bool)
+        if pad_token_id is None:
+            return torch.ones_like(responses, dtype=torch.bool)
+        return responses != pad_token_id
+
+    @classmethod
+    def _valid_response_token_ids(cls, batch, pad_token_id: int | None) -> list[list[int]]:
+        responses = batch.batch["responses"]
+        response_mask = cls._response_attention_mask(batch, pad_token_id)
+        return [ids[mask].detach().cpu().tolist() for ids, mask in zip(responses, response_mask, strict=True)]
+
+    @staticmethod
+    def _write_sequence_rewards(batch, reward_tensor, sequence_rewards, pad_token_id: int | None):
+        rewritten = torch.zeros_like(reward_tensor)
+        response_mask = MiniOneRecTrainerAdapter._response_attention_mask(batch, pad_token_id)
         valid_lengths = response_mask.sum(dim=1).clamp(min=1)
         rewritten[torch.arange(rewritten.size(0), device=rewritten.device), valid_lengths - 1] = sequence_rewards
         return rewritten
