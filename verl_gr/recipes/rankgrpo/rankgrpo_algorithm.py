@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import os
 from typing import Any
 
 import torch
@@ -10,7 +11,13 @@ from verl import DataProto
 
 from verl_gr.recipes.rankgrpo.rankgrpo_reward import rank_rewards_from_text
 
-__all__ = ["compute_rank_grpo_advantage", "rankgrpo_enabled"]
+__all__ = [
+    "compute_rank_grpo_advantage",
+    "compute_rank_grpo_training_reward_metrics",
+    "rankgrpo_enabled",
+    "_compute_rank_grpo_completion_stats",
+    "_rankgrpo_should_dump_debug_step",
+]
 
 
 def _cfg_get(config: Any, key: str, default=None):
@@ -75,6 +82,105 @@ def _segment_rank_tokens(
 
     rank_token_mask = response_mask.bool() & (seg_ids >= 0) & (seg_ids < rec_num)
     return seg_ids, rank_token_mask
+
+
+def _compute_rank_grpo_completion_stats(
+    *,
+    response_mask: torch.Tensor,
+    rank_seg_ids: torch.Tensor,
+    overflow_token_mask: torch.Tensor,
+    eos_mask: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    completion_lengths = response_mask.sum(dim=1).float()
+    terminated_with_eos = eos_mask.any(dim=1).float()
+    eos_any = eos_mask.any(dim=1)
+    eos_first = eos_mask.float().argmax(dim=1) + 1
+    terminated_lengths = torch.where(
+        eos_any,
+        eos_first.float(),
+        torch.zeros_like(completion_lengths),
+    )
+    items_detected = (rank_seg_ids.where(response_mask.bool(), torch.full_like(rank_seg_ids, -1)).amax(dim=1) + 1).clamp(min=0).float()
+    overflow_token_counts = overflow_token_mask.sum(dim=1).float()
+    return {
+        "completion_lengths": completion_lengths,
+        "terminated_with_eos": terminated_with_eos,
+        "terminated_lengths": terminated_lengths,
+        "items_detected": items_detected,
+        "overflow_token_counts": overflow_token_counts,
+    }
+
+
+def _rankgrpo_should_dump_debug_step(step: int | None) -> bool:
+    explicit = os.environ.get("VERL_GR_RANKGRPO_DEBUG_STEPS", "").strip()
+    if explicit:
+        wanted = {s.strip() for s in explicit.split(",") if s.strip()}
+        if step is None:
+            return False
+        return str(step) in wanted
+    debug = os.environ.get("VERL_GR_DEBUG", "0").strip().lower()
+    return debug in {"1", "true", "yes", "on"}
+
+
+def _mean_tensor(values: torch.Tensor) -> float:
+    if values.numel() == 0:
+        return 0.0
+    return float(values.float().mean().item())
+
+
+def compute_rank_grpo_training_reward_metrics(batch_like: Any) -> dict[str, float]:
+    non_tensor = getattr(batch_like, "non_tensor_batch", {}) or {}
+    out: dict[str, float] = {}
+
+    rank_reward_sum = non_tensor.get("rank_reward_sum")
+    if rank_reward_sum is not None and len(rank_reward_sum) > 0:
+        tensor = torch.as_tensor(rank_reward_sum, dtype=torch.float32)
+        out["train/rankgrpo/reward_total"] = _mean_tensor(tensor)
+        out["train/rankgrpo/hit_any"] = float((tensor > 0).float().mean().item())
+
+    rank_reward_mean = non_tensor.get("rank_reward_mean")
+    if rank_reward_mean is not None and len(rank_reward_mean) > 0:
+        out["train/rankgrpo/reward"] = _mean_tensor(torch.as_tensor(rank_reward_mean, dtype=torch.float32))
+
+    completion_lengths = non_tensor.get("rankgrpo_completion_length")
+    if completion_lengths is not None:
+        completion_lengths = torch.as_tensor(completion_lengths, dtype=torch.float32)
+        if completion_lengths.numel() > 0:
+            out["train/rankgrpo/completions/mean_length"] = float(completion_lengths.mean().item())
+            out["train/rankgrpo/completions/min_length"] = float(completion_lengths.min().item())
+            out["train/rankgrpo/completions/max_length"] = float(completion_lengths.max().item())
+
+    terminated_with_eos = non_tensor.get("rankgrpo_terminated_with_eos")
+    if terminated_with_eos is not None:
+        terminated_with_eos = torch.as_tensor(terminated_with_eos, dtype=torch.float32)
+        if terminated_with_eos.numel() > 0:
+            out["train/rankgrpo/items/eos_rate"] = float(terminated_with_eos.mean().item())
+
+    terminated_length = non_tensor.get("rankgrpo_terminated_length")
+    if terminated_length is not None:
+        terminated_length = torch.as_tensor(terminated_length, dtype=torch.float32)
+        valid = terminated_length[terminated_length > 0]
+        if valid.numel() > 0:
+            out["train/rankgrpo/completions/mean_terminated_length"] = float(valid.mean().item())
+            out["train/rankgrpo/completions/min_terminated_length"] = float(valid.min().item())
+            out["train/rankgrpo/completions/max_terminated_length"] = float(valid.max().item())
+
+    items_detected = non_tensor.get("rankgrpo_items_detected")
+    if items_detected is not None:
+        items_detected = torch.as_tensor(items_detected, dtype=torch.float32)
+        if items_detected.numel() > 0:
+            out["train/rankgrpo/items/detected_mean"] = float(items_detected.mean().item())
+            out["train/rankgrpo/items/detected_max"] = float(items_detected.max().item())
+
+    overflow_counts = non_tensor.get("rankgrpo_overflow_token_count")
+    if overflow_counts is not None and completion_lengths is not None:
+        overflow_counts = torch.as_tensor(overflow_counts, dtype=torch.float32)
+        denom = float(completion_lengths.sum().item())
+        if denom > 0:
+            out["train/rankgrpo/completions/clipped_ratio"] = float((overflow_counts > 0).float().mean().item())
+            out["train/rankgrpo/items/overflow_token_ratio"] = float(overflow_counts.sum().item() / denom)
+
+    return out
 
 
 def compute_rank_grpo_advantage(

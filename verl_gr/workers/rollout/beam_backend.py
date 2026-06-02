@@ -142,11 +142,20 @@ async def run_async_beam_search(
                 continue
 
             step_logprobs = first_output.logprobs[0]
-            ranked_tokens = sorted(
-                step_logprobs.items(),
-                key=lambda item: item[1].logprob,
-                reverse=True,
-            )[:logprobs_num]
+            if decode_mode == "stochastic_constrained" and first_output.token_ids:
+                sampled_token = int(first_output.token_ids[0])
+                sampled_info = step_logprobs.get(sampled_token)
+                if sampled_info is None:
+                    if allowed_tokens is not None:
+                        add_fallback_token(beam, allowed_tokens, expanded)
+                    continue
+                ranked_tokens = [(sampled_token, sampled_info)]
+            else:
+                ranked_tokens = sorted(
+                    step_logprobs.items(),
+                    key=lambda item: item[1].logprob,
+                    reverse=True,
+                )[:logprobs_num]
             if allowed_tokens is not None:
                 ranked_tokens = [(token_id, token_info) for token_id, token_info in ranked_tokens if int(token_id) in allowed_tokens]
                 if not ranked_tokens:

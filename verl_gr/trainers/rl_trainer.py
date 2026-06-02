@@ -193,6 +193,27 @@ def _get_constraint_info_file(rollout_config) -> str:
     return ""
 
 
+def _prune_unkept_checkpoint_dirs(ckpt_root: str, keep_paths: set[str]) -> list[str]:
+    """Delete `global_step_*` dirs under `ckpt_root` that are not in `keep_paths`."""
+
+    removed: list[str] = []
+    if not os.path.isdir(ckpt_root):
+        return removed
+
+    normalized_keep = {os.path.abspath(path) for path in keep_paths}
+    for name in os.listdir(ckpt_root):
+        if not name.startswith("global_step_"):
+            continue
+        path = os.path.join(ckpt_root, name)
+        abs_path = os.path.abspath(path)
+        if abs_path in normalized_keep:
+            continue
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+            removed.append(path)
+    return removed
+
+
 class RLTrainer(RayPPOTrainerBase):
     """RayPPOTrainer override with different workload helpers."""
 
@@ -531,11 +552,8 @@ class RLTrainer(RayPPOTrainerBase):
         drop = state[top_k:]
 
         keep_paths = {entry["path"] for entry in keep}
-        for entry in drop:
-            path = entry.get("path")
-            if path and path not in keep_paths and os.path.isdir(path):
-                shutil.rmtree(path)
-                print(f"[topk] Removed checkpoint outside top-{top_k}: {path}")
+        for path in _prune_unkept_checkpoint_dirs(self.config.trainer.default_local_dir, keep_paths):
+            print(f"[topk] Removed checkpoint outside top-{top_k}: {path}")
 
         self._save_topk_checkpoint_state(keep)
         print(f"[topk] Kept top-{top_k} checkpoints by {metric_name}: {keep}")
