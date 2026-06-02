@@ -7,8 +7,10 @@ runtime after the recipe refactor. The main path is:
 2. `RecipeTaskRuntime` or a recipe task prepares tokenizer, processor, worker class, and rollout registration.
 3. `RLTrainer` delegates recipe-specific generation and validation through `TrainerTaskAdapter`.
 4. Custom beam workloads register rollout replicas and async agent loops under `verl_gr.workers.rollout`.
-   Beam expansion itself runs in rollout-server classes (engine side), while
-   agent loops focus on request grouping and metadata routing.
+   **OpenOneRec** and **MiniOneRec async** paths run beam expansion in rollout-server
+   classes (`TwoStagevLLMHttpServer`, `ConstrainedBeamvLLMHttpServer`); agent loops only
+   group requests and attach metadata (`beam_index`, `beam_group_id`, etc.). MiniOneRec
+   DDP training additionally routes to `hf_constrained_beam_generate` on the actor worker.
 
 ```mermaid
 classDiagram
@@ -121,6 +123,11 @@ class OneRecActorRolloutRefWorker {
 }
 class MiniOneRecActorRolloutRefWorker {
   +init_model()
+  +hf_constrained_beam_generate(prompts, meta_info) dict
+}
+class HfConstrainedBeamGenerator {
+  +generate_train(model, prompts, prompt_token_ids)
+  +generate_eval(model, prompts, prompt_token_ids)
 }
 ActorRolloutRefWorker <|-- OneRecActorRolloutRefWorker
 ActorRolloutRefWorker <|-- MiniOneRecActorRolloutRefWorker
@@ -133,6 +140,7 @@ class RolloutRegistration {
 }
 class TwoStagevLLMRollout {
   +_two_stage_generation(prompts, kwargs) DataProto
+  +update_weights(weights, global_steps)
 }
 class ConstrainedBeamvLLMRollout {
   +update_weights(weights, global_steps)
@@ -142,6 +150,10 @@ ServerAdapter <|-- ConstrainedBeamvLLMRollout
 
 class TwoStagevLLMHttpServer {
   +generate(prompt_ids, sampling_params, request_id, image_data, video_data)
+  +_generate_two_stage(...) TokenOutput
+  +_build_two_stage_cache_entry(...) dict
+  +_run_stage2_beam_search(...) list
+  +abort_all_requests(reset_prefix_cache)
 }
 class ConstrainedBeamvLLMHttpServer {
   +generate(prompt_ids, sampling_params, request_id, image_data, video_data)
@@ -176,11 +188,14 @@ class OpenOneRecTwoStageAgentLoop {
 class OpenOneRecAgentLoopWorker {
   +generate_sequences(batch)
 }
-class OpenOneRecAgentLoopManager
+class OpenOneRecAgentLoopManager {
+  +generate_sequences(prompts) DataProto
+}
 SingleTurnAgentLoop <|-- OpenOneRecTwoStageAgentLoop
 AgentLoopWorker <|-- OpenOneRecAgentLoopWorker
 AgentLoopManager <|-- OpenOneRecAgentLoopManager
-OpenOneRecAgentLoopWorker ..> OpenOneRecTwoStageAgentLoop : registered loop
+OpenOneRecAgentLoopWorker ..> OpenOneRecTwoStageAgentLoop : metadata routing only
+OpenOneRecTwoStageAgentLoop ..> TwoStagevLLMHttpServer : server_manager.generate
 
 class MiniOneRecConstrainedBeamAgentLoop {
   +run(sampling_params, kwargs) AgentLoopOutput
@@ -188,11 +203,17 @@ class MiniOneRecConstrainedBeamAgentLoop {
 class MiniOneRecConstrainedBeamAgentLoopWorker {
   +generate_sequences(batch)
 }
-class MiniOneRecConstrainedBeamAgentLoopManager
+class MiniOneRecConstrainedBeamAgentLoopManager {
+  +generate_sequences(prompts) DataProto
+  +_should_route_to_hf(prompts) bool
+  +_hf_generate_sequences(prompts) DataProto
+}
 SingleTurnAgentLoop <|-- MiniOneRecConstrainedBeamAgentLoop
 AgentLoopWorker <|-- MiniOneRecConstrainedBeamAgentLoopWorker
 AgentLoopManager <|-- MiniOneRecConstrainedBeamAgentLoopManager
-MiniOneRecConstrainedBeamAgentLoopWorker ..> MiniOneRecConstrainedBeamAgentLoop : registered loop
+MiniOneRecConstrainedBeamAgentLoopWorker ..> MiniOneRecConstrainedBeamAgentLoop : metadata routing only
+MiniOneRecConstrainedBeamAgentLoop ..> ConstrainedBeamvLLMHttpServer : server_manager.generate
+MiniOneRecConstrainedBeamAgentLoopManager ..> MiniOneRecConstrainedBeamAgentLoopWorker : fallback async vLLM path
 
 TaskRunner ..> TaskSpec : registry
 TaskRunner ..> OneRecTask : openonerec
@@ -207,13 +228,17 @@ TaskRunner ..> RankGRPODataset : create rl dataset
 
 OneRecTask ..> RolloutRegistration : two stage
 OneRecTask ..> OneRecActorRolloutRefWorker : selects
-OneRecTask ..> OpenOneRecAgentLoopManager : configures
-OneRecActorRolloutRefWorker ..> TwoStagevLLMRollout : registers
+OneRecTask ..> OpenOneRecAgentLoopManager : configures rollout-server routing
+OneRecActorRolloutRefWorker ..> TwoStagevLLMRollout : registers rollout engine
+TwoStagevLLMRollout ..> TwoStagevLLMHttpServer : async generation dispatch
+OpenOneRecAgentLoopManager ..> OpenOneRecAgentLoopWorker : dispatches grouped requests
 
 MiniOneRecTask ..> RolloutRegistration : constrained beam
 MiniOneRecTask ..> MiniOneRecActorRolloutRefWorker : selects
-MiniOneRecTask ..> MiniOneRecConstrainedBeamAgentLoopManager : configures
-MiniOneRecActorRolloutRefWorker ..> ConstrainedBeamvLLMRollout : registers
+MiniOneRecTask ..> MiniOneRecConstrainedBeamAgentLoopManager : configures HF-first routing
+MiniOneRecConstrainedBeamAgentLoopManager ..> MiniOneRecActorRolloutRefWorker : calls hf_constrained_beam_generate
+MiniOneRecActorRolloutRefWorker ..> HfConstrainedBeamGenerator : constrained HF generate
+MiniOneRecActorRolloutRefWorker ..> ConstrainedBeamvLLMRollout : optional async rollout registration
 
 RankGRPOTask ..> RankGRPOTokenizer : builds tokenizer
 RankGRPOTask ..> ActorRolloutRefWorker : vanilla vllm
@@ -228,12 +253,17 @@ RankGRPOAlgorithm ..> RankGRPOReward : per rank rewards
 
 - OpenOneRec uses `OneRecTask` to expand rollout counts by beam width, register the
   `two_stage` async rollout path, select `OneRecActorRolloutRefWorker`, and wire
-  `OpenOneRecAgentLoopManager`. Its dataset, reward, and task runtime still live
-  in `verl_gr/recipes/openonerec/onerec_recipe.py`; validation and checkpoint
-  pruning live in `verl_gr/recipes/openonerec/onerec_trainer.py`.
-  The two-stage beam decode is executed in
-  `workers/rollout/two_stage_vllm_async.py::TwoStagevLLMHttpServer`
-  (stage cache + semaphore + beam backend), not inside trainer-side Python loops.
+  `OpenOneRecAgentLoopManager`. Dataset, reward, and task runtime live in
+  `verl_gr/recipes/openonerec/onerec_recipe.py`; validation and checkpoint pruning
+  live in `onerec_trainer.py`.
+  **Decode path (engine / rollout layer, not trainer):**
+  - `OpenOneRecTwoStageAgentLoop` / `OpenOneRecAgentLoopWorker` only attach
+    `stage1_sample_idx`, `beam_index`, and `beam_group_id`, then call
+    `server_manager.generate(...)`.
+  - Stage-1 sampling, stage-2 beam expansion, per-group cache reuse, and inflight
+    throttling run in `workers/rollout/two_stage_vllm_async.py::TwoStagevLLMHttpServer`
+    (`_generate_two_stage`, `_build_two_stage_cache_entry`, `_run_stage2_beam_search`).
+  - Shared beam kernel: `workers/rollout/beam_backend.py::run_async_beam_search`.
 - MiniOneRec uses `MiniOneRecTask` to register `constrained_beam`, select
   `MiniOneRecActorRolloutRefWorker`, and wire `MiniOneRecConstrainedBeamAgentLoopManager`.
   Dataset, reward, format helpers, worker shim, agent loop, and trainer adapter
@@ -263,10 +293,12 @@ RankGRPOAlgorithm ..> RankGRPOReward : per rank rewards
   `rankgrpo_algorithm.compute_rank_grpo_advantage` only when
   `algorithm.rank_grpo.enable` is true.
 - `verl_gr.workers.rollout` contains the reusable beam-search infrastructure:
-  registration helpers, two async vLLM server subclasses, rollout adapter classes,
-  and the shared async beam backend used by both beam-search recipes.
-  This is the current performance-critical decode layer replacing the old
-  high-level Python-only beam orchestration idea.
+  registration helpers, async vLLM server subclasses (`TwoStagevLLMHttpServer`,
+  `ConstrainedBeamvLLMHttpServer`), rollout adapter classes, and
+  `beam_backend.run_async_beam_search`. OpenOneRec and MiniOneRec async paths
+  execute beam expansion in these rollout-server classes; MiniOneRec DDP training
+  additionally uses `HfConstrainedBeamGenerator` on the actor worker.
+  This engine-side decode layer replaces the earlier trainer-side Python beam idea.
 
 ## Diagram Legend
 
