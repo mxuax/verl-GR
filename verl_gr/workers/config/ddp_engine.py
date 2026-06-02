@@ -28,6 +28,8 @@ class DDPEngineConfig(EngineConfig):
     entropy_from_logits_with_chunking: bool = False
     use_torch_compile: bool = True
     entropy_checkpointing: bool = False
+    # MiniOneRec: only compute LM logits for completion tokens (logits_to_keep).
+    completion_only_logprob: bool = False
     qat: QATEngineConfig = field(default_factory=QATEngineConfig)
 
     def __post_init__(self):

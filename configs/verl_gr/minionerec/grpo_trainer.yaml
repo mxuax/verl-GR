@@ -49,6 +49,8 @@ actor_rollout_ref:
     entropy_from_logits_with_chunking: true
     fsdp_config:
       model_dtype: bfloat16
+    engine_config:
+      completion_only_logprob: true
     profiler:
       enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
       all_ranks: ${oc.select:actor_rollout_ref.actor.profiler.all_ranks,false}
@@ -67,14 +69,17 @@ actor_rollout_ref:
     kl_loss_type: low_var_kl
     policy_loss:
       loss_mode: minionerec_reinforce
+    fsdp_config:
+      model_dtype: bfloat16
+    engine_config:
+      completion_only_logprob: true
     optim:
+      optimizer: paged_adamw_32bit
       lr: 1e-5
       lr_warmup_steps_ratio: 0.03
       weight_decay: 0.0
       clip_grad: 0.3
       lr_scheduler_type: cosine
-    fsdp_config:
-      model_dtype: bfloat16
     profiler:
       enable: false
       all_ranks: false
@@ -143,7 +148,7 @@ algorithm:
 trainer:
   project_name: MiniOneRec_RL
   experiment_name: minionerec_grpo_constrained_beam
-  val_before_train: true
+  val_before_train: false
   best_ckpt_metric: val-aux/*/hr@20/mean
   default_hdfs_dir: null
   logger: [tensorboard]

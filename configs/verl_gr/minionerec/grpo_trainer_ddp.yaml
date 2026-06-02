@@ -29,6 +29,9 @@ task:
   name: minionerec
   class_path: verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask
   trainer_adapter_class: verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter
+  reward_penalties:
+    empty_completion: -1.0
+    invalid_sid: -0.5
 
 data:
   tokenizer: ${actor_rollout_ref.model.path}
@@ -193,7 +196,7 @@ trainer:
   project_name: MiniOneRec_RL
   experiment_name: minionerec_grpo_ddp
   total_training_steps: null
-  val_before_train: true
+  val_before_train: false
   log_val_generations: 0
   rollout_data_dir: null
   validation_data_dir: null

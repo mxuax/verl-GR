@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 与 MiniOneRec/rl.sh 超参对齐的 verl-GR GRPO 启动（假设 4 张 GPU）。
 # 在 verl-GR 根目录执行: 先改好 BASE_MODEL，再:
-#   bash scripts/run_minionerec_grpo_align_rl_sh_4gpu.sh
+#   bash scripts/run_minionerec_grpo_rl_aligned.sh
 #
 # 与 rl.sh 对应关系（要点）:
 #   accelerate --num_processes 4     -> N_GPUS=4
-#   --train_batch_size 64          -> TRAIN_BATCH_SIZE=64
+#   --train_batch_size 64 (completions) -> TRAIN_BATCH_SIZE=32 prompts (× beam 16 = 512 completions/step)
 #   --gradient_accumulation_steps 2-> PPO_MICRO_BATCH_PER_GPU=2（与 run_minionerec_grpo 注释一致）
 #   --num_train_epochs 2           -> TOTAL_EPOCHS=2
 #   --num_generations 16           -> BEAM_WIDTH=16
@@ -18,6 +18,8 @@
 #
 # 未做一一映射（verl 语义不同）: eval_batch_size、eval_step；可用 trainer.test_freq 等自行加覆盖。
 #
+# 依赖: paged_adamw_32bit 需要 bitsandbytes（pip install bitsandbytes）
+# 性能: completion_only_logprob + logits_to_keep 已在 MiniOneRec recipe 默认开启（对齐原仓 TRL）
 # 显存: 须开启 rmpad + 分块熵，避免 old_log_prob 阶段对整段 padded logits 做全词表 softmax OOM。
 #       （已写入下方 Hydra 覆盖；亦见 configs/verl_gr/minionerec/grpo_trainer.yaml 默认）
 
@@ -29,13 +31,12 @@ MINIONEREC_ROOT="${MINIONEREC_ROOT:-${VERL_GR_ROOT}/../MiniOneRec}"
 CATEGORY="${CATEGORY:-Industrial_and_Scientific}"
 
 # 必改: SFT/基座 checkpoint 目录（与 rl.sh --model_path 一致）
-BASE_MODEL="${BASE_MODEL:-${MINIONEREC_ROOT}/output_dir/xxx/checkpoint-390}"
-
-TRAIN_FILE="${TRAIN_FILE:-${MINIONEREC_ROOT}/data/Amazon/train/${CATEGORY}_5_2016-10-2018-11.csv}"
-VAL_FILE="${VAL_FILE:-${MINIONEREC_ROOT}/data/Amazon/valid/${CATEGORY}_5_2016-10-2018-11.csv}"
-INFO_FILE="${INFO_FILE:-${MINIONEREC_ROOT}/data/Amazon/info/${CATEGORY}_5_2016-10-2018-11.txt}"
-SID_INDEX_FILE="${SID_INDEX_FILE:-${MINIONEREC_ROOT}/data/Amazon/index/${CATEGORY}.index.json}"
-ITEM_META_FILE="${ITEM_META_FILE:-${MINIONEREC_ROOT}/data/Amazon/index/${CATEGORY}.item.json}"
+export BASE_MODEL="${BASE_MODEL:-${MINIONEREC_ROOT}/output_dir/xxx/checkpoint-390}"
+export TRAIN_FILE="${TRAIN_FILE:-${MINIONEREC_ROOT}/data/Amazon/train/${CATEGORY}_5_2016-10-2018-11.csv}"
+export VAL_FILE="${VAL_FILE:-${MINIONEREC_ROOT}/data/Amazon/valid/${CATEGORY}_5_2016-10-2018-11.csv}"
+export INFO_FILE="${INFO_FILE:-${MINIONEREC_ROOT}/data/Amazon/info/${CATEGORY}_5_2016-10-2018-11.txt}"
+export SID_INDEX_FILE="${SID_INDEX_FILE:-${MINIONEREC_ROOT}/data/Amazon/index/${CATEGORY}.index.json}"
+export ITEM_META_FILE="${ITEM_META_FILE:-${MINIONEREC_ROOT}/data/Amazon/index/${CATEGORY}.item.json}"
 
 # 4 卡（与 rl.sh accelerate --num_processes 4 一致）
 export N_NODES=1
@@ -57,8 +58,9 @@ export TRAIN_BATCH_SIZE=32
 export PPO_MICRO_BATCH_PER_GPU=2
 export TOTAL_EPOCHS=2
 export BEAM_WIDTH=16
-export ROLLOUT_TEMPERATURE=1.0
-export LEARNING_RATE=1e-5
+export ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-1.0}"
+export LEARNING_RATE="${LEARNING_RATE:-1e-5}"
+export KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 export SEQ_TITLE_SAMPLE=10000
 # 与 run_minionerec_grpo.sh 默认一致（未在 rl.sh 中单独写出）
 export ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-16}"
@@ -80,7 +82,7 @@ cd "${VERL_GR_ROOT}"
 bash scripts/run_minionerec_grpo.sh \
   ++data.shuffle=true \
   ++data.seed=42 \
-  ++trainer.val_before_train=true \
+  ++trainer.val_before_train=false \
   ++trainer.save_freq=165 \
   ++trainer.test_freq=165 \
   ++data.filter_overlong_prompts=false \
@@ -90,7 +92,7 @@ bash scripts/run_minionerec_grpo.sh \
   ++actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.03 \
   ++actor_rollout_ref.actor.optim.clip_grad=0.3 \
   ++actor_rollout_ref.actor.optim.weight_decay=0.0 \
-  ++actor_rollout_ref.actor.kl_loss_coef=0.001 \
+  ++actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
   ++actor_rollout_ref.actor.use_dynamic_bsz=true \
   ++actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
   ++actor_rollout_ref.model.use_remove_padding=true \

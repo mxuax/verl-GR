@@ -11,6 +11,9 @@
 
 - `docs/verl_gr/openonerec_mapping.md`: maps legacy OpenOneRec runtime modules to the current `verl_gr` layout.
 - `docs/verl_gr/openonerec_parity_plan.md`: tracks the current Phase B parity/smoke checklist after the cleanup refactor.
+- `docs/verl_gr/minionerec_mapping.md`: MiniOneRec dataset / reward / beam contract.
+- `docs/verl_gr/minionerec_pr_changes.md`: workingbranch vs `main` (MiniOneRec + performance).
+- `scripts/README.md`: launcher index for GRPO / SFT / profiling scripts.
 
 ## Data preparation
 
@@ -47,6 +50,15 @@ pip install -r requirements.txt
 cd verl-GR
 export BASE_MODEL=/path/to/your/model
 bash scripts/run_openonerec_grpo.sh
+```
+
+3. MiniOneRec GRPO (DDP, aligned with `MiniOneRec/rl.sh`; requires `bitsandbytes` for `paged_adamw_32bit`):
+
+```bash
+cd verl-GR
+export BASE_MODEL=/path/to/your/checkpoint
+export PYTHON_BIN=/path/to/vllm-gr/bin/python
+bash scripts/run_minionerec_grpo_rl_aligned.sh
 ```
 
 ## Two-Stage Notes

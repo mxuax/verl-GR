@@ -16,7 +16,11 @@ from verl import DataProto
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from verl.trainer.ppo.reward import extract_reward
 
-from verl_gr.recipes.minionerec.minionerec_reward import ndcg_penalties, normalize_sid
+from verl_gr.recipes.minionerec.minionerec_reward import (
+    RewardPenaltyConfig,
+    compute_group_training_rewards,
+    normalize_sid,
+)
 from verl_gr.trainers.task_adapter import TrainerTaskAdapter
 from verl_gr.workers.rollout.beam_config import (
     BEAM_RETURN_MODE_KEY,
@@ -44,38 +48,46 @@ class MiniOneRecTrainerAdapter(TrainerTaskAdapter):
         completions = [normalize_sid(trainer.tokenizer.decode(ids, skip_special_tokens=True)) for ids in batch.batch["responses"]]
         targets = [normalize_sid(item.get("ground_truth", "")) for item in batch.non_tensor_batch["reward_model"]]
         group_keys = self._group_keys(batch)
-        rule_rewards = np.array([float(pred == target and target != "") for pred, target in zip(completions, targets, strict=True)])
-        ranking_rewards = np.zeros(len(completions), dtype=np.float32)
-        group_has_hit = np.zeros(len(completions), dtype=np.float32)
+        penalty_cfg = self._reward_penalty_config(trainer)
+        reward_parts = compute_group_training_rewards(
+            completions, targets, group_keys, penalty_cfg=penalty_cfg
+        )
+        rule_rewards = np.array(reward_parts["rule_rewards"], dtype=np.float32)
+        ranking_rewards = np.array(reward_parts["ranking_rewards"], dtype=np.float32)
+        shape_penalties = np.array(reward_parts["shape_penalties"], dtype=np.float32)
+        total_rewards = np.array(reward_parts["total_rewards"], dtype=np.float32)
+        group_has_hit = np.array(reward_parts["group_has_hit"], dtype=np.float32)
 
-        groups: dict[Any, list[int]] = defaultdict(list)
-        for idx, key in enumerate(group_keys):
-            groups[key].append(idx)
-
-        for indices in groups.values():
-            hit = any(rule_rewards[idx] > 0 for idx in indices)
-            if not hit:
-                continue
-            group_has_hit[indices] = 1.0
-            discounts = ndcg_penalties(len(indices))
-            for local_rank, idx in enumerate(indices):
-                if rule_rewards[idx] == 0:
-                    ranking_rewards[idx] = discounts[local_rank]
-
-        total_rewards = rule_rewards.astype(np.float32) + ranking_rewards
         reward_batch.batch["rm_scores"] = self._write_sequence_rewards(
             batch=batch,
             reward_tensor=reward_tensor,
             sequence_rewards=torch.tensor(total_rewards, dtype=reward_tensor.dtype, device=reward_tensor.device),
             pad_token_id=trainer.tokenizer.pad_token_id,
         )
-        invalid_sid = np.array([float(not self._looks_like_sid(pred)) for pred in completions], dtype=object)
         return reward_batch, {
             "minionerec_rule_reward": rule_rewards.astype(object),
             "minionerec_ranking_reward": ranking_rewards.astype(object),
+            "minionerec_shape_penalty": shape_penalties.astype(object),
+            "minionerec_total_reward": total_rewards.astype(object),
             "minionerec_group_has_hit": group_has_hit.astype(object),
-            "minionerec_invalid_sid": invalid_sid,
+            "minionerec_invalid_sid": np.array(reward_parts["invalid_sid"], dtype=object),
+            "minionerec_empty_completion": np.array(reward_parts["empty_completion"], dtype=object),
         }
+
+    @staticmethod
+    def _reward_penalty_config(trainer) -> RewardPenaltyConfig:
+        """Read optional Hydra overrides under ``task.reward_penalties``."""
+
+        defaults = RewardPenaltyConfig()
+        try:
+            task_cfg = trainer.config.get("task") or {}
+            penalties = task_cfg.get("reward_penalties") or {}
+            return RewardPenaltyConfig(
+                empty_completion=float(penalties.get("empty_completion", defaults.empty_completion)),
+                invalid_sid=float(penalties.get("invalid_sid", defaults.invalid_sid)),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return defaults
 
     def validate(self, trainer):
         data_source_lst = []

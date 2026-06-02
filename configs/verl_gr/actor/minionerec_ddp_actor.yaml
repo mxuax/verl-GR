@@ -19,8 +19,10 @@ engine_config:
   model_dtype: bf16
   use_torch_compile: true
   seed: 42
+  completion_only_logprob: true
 
 optim:
+  optimizer: paged_adamw_32bit
   lr: 1e-5
   lr_warmup_steps_ratio: 0.03
   weight_decay: 0.0

@@ -24,6 +24,7 @@ from verl.utils.device import get_device_id, get_device_name
 from verl.workers.config import HFModelConfig, FSDPOptimizerConfig
 from verl.workers.engine.base import BaseEngine, BaseEngineCtx, EngineRegistry
 from verl.workers.engine.fsdp.transformer_impl import FSDPEngine, FSDPEngineWithLMHead
+from verl_gr.workers.optimizer import build_actor_optimizer
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -269,6 +270,9 @@ class DDPEngine(FSDPEngine):
     # Overrides — optimizer
     # ------------------------------------------------------------------
 
+    def _build_optimizer(self, module):
+        return build_actor_optimizer(module.parameters(), self.optimizer_config)
+
     def optimizer_step(self):
         assert self.optimizer_config.clip_grad is not None
 
@@ -404,12 +408,11 @@ class DDPEngineTrainModeCtx(BaseEngineCtx):
 class DDPEngineWithLMHead(FSDPEngineWithLMHead, DDPEngine):
     """DDP engine with language-model head forward logic.
 
-    MRO: DDPEngineWithLMHead → FSDPEngineWithLMHead → DDPEngine →
-    FSDPEngine → BaseEngine.
+    ``CompletionOnlyLogprobMixin`` is applied once on ``FSDPEngineWithLMHead`` via
+    ``apply_minionerec_engine_patches()`` (see ``ddp/__init__.py``). Do not
+    mix it in again here — that breaks MRO after the global patch.
 
-    - ``__init__`` and DDP-specific overrides come from ``DDPEngine``.
-    - ``prepare_model_inputs`` / ``prepare_model_outputs`` /
-      ``forward_step`` come from ``FSDPEngineWithLMHead`` — zero copy.
+    MRO: DDPEngineWithLMHead → MiniOneRecFSDPEngineWithLMHead → DDPEngine → …
     """
 
 

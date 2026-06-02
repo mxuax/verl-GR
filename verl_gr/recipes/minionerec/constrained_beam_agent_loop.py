@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -31,6 +32,18 @@ from verl_gr.workers.rollout.beam_config import (
     get_rollout_custom_nested_value,
     get_rollout_custom_value,
 )
+
+
+@contextmanager
+def _nvtx_range(name: str):
+    enabled = torch.cuda.is_available() and hasattr(torch.cuda, "nvtx")
+    if enabled:
+        torch.cuda.nvtx.range_push(name)
+    try:
+        yield
+    finally:
+        if enabled:
+            torch.cuda.nvtx.range_pop()
 
 
 @register("minionerec_constrained_beam_agent")
@@ -377,7 +390,8 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
 
         # Call actor_rollout_wg via Ray (non-blocking I/O friendly — Ray RPC
         # releases the GIL so this does not stall the event loop).
-        result = self.worker_group.hf_constrained_beam_generate(unique_texts, meta_info)
+        with _nvtx_range("gen.generate"):
+            result = self.worker_group.hf_constrained_beam_generate(unique_texts, meta_info)
 
         # Reassemble per-rank prompt shards back into original prompt-group order.
         ordered_response_groups: list[list[list[int]] | None] = [None] * n_unique

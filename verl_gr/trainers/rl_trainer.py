@@ -5,6 +5,7 @@ import json
 import math
 import os
 import shutil
+from contextlib import contextmanager
 from typing import Any
 import torch
 
@@ -37,6 +38,18 @@ from verl_gr.workers.rollout.beam_config import (
 
 AdvantageEstimator = getattr(core_algos, "AdvantageEstimator")
 _RANKGRPO_TOKENIZER = None
+
+
+@contextmanager
+def _nvtx_range(name: str):
+    enabled = torch.cuda.is_available() and hasattr(torch.cuda, "nvtx")
+    if enabled:
+        torch.cuda.nvtx.range_push(name)
+    try:
+        yield
+    finally:
+        if enabled:
+            torch.cuda.nvtx.range_pop()
 
 
 class _OpenOneRecTrainerAdapter(TrainerTaskAdapter):
@@ -365,11 +378,16 @@ class RLTrainer(RayPPOTrainerBase):
         return old_log_prob, 0.0
 
     def _update_actor(self, batch: DataProto) -> DataProto:
-        actor_output = super()._update_actor(batch)
+        with _nvtx_range("actor.forward_backward"):
+            actor_output = super()._update_actor(batch)
         self._add_actor_lr_metrics(actor_output.meta_info["metrics"])
         if not batch.meta_info.get("validate", False):
             self._try_sync_ref_model()
         return actor_output
+
+    def _compute_ref_log_prob(self, batch: DataProto) -> DataProto:
+        with _nvtx_range("ref.forward"):
+            return super()._compute_ref_log_prob(batch)
 
     def _try_sync_ref_model(self):
         if not self.use_reference_policy or self.ref_in_actor:
@@ -628,7 +646,8 @@ class RLTrainer(RayPPOTrainerBase):
         return metrics
 
     def _compute_reward_colocate(self, batch: DataProto):
-        reward_batch = super()._compute_reward_colocate(batch)
+        with _nvtx_range("reward.compute"):
+            reward_batch = super()._compute_reward_colocate(batch)
         if batch.meta_info.get("validate", False):
             return reward_batch
         reward_batch, reward_extra_info = self._get_task_adapter().postprocess_rewards(self, batch, reward_batch)

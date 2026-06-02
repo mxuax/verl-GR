@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from typing import Any
 
 
@@ -35,13 +36,105 @@ def ndcg_penalties(group_size: int) -> list[float]:
     return [(-value / denom) for value in raw]
 
 
+def looks_like_sid(text: str) -> bool:
+    sid = normalize_sid(text)
+    return bool(sid) and sid.startswith("<a_") and "<b_" in sid and "<c_" in sid
+
+
 def is_valid_sid(prediction: str, valid_sid_set: set[str] | None = None) -> float:
     sid = normalize_sid(prediction)
     if not sid:
         return 0.0
     if valid_sid_set is None:
-        return float(sid.startswith("<a_") and "<b_" in sid and "<c_" in sid)
+        return float(looks_like_sid(prediction))
     return float(sid in valid_sid_set)
+
+
+class RewardPenaltyConfig:
+    """Shaping penalties for empty / invalid rollouts (verl GRPO training).
+
+    Plain class (not ``@dataclass``): Ray ``load_extern_object`` can import this
+    module without registering it in ``sys.modules``, which breaks dataclass setup.
+    """
+
+    __slots__ = ("empty_completion", "invalid_sid")
+
+    def __init__(
+        self,
+        empty_completion: float = -1.0,
+        invalid_sid: float = -0.5,
+    ):
+        self.empty_completion = empty_completion
+        self.invalid_sid = invalid_sid
+
+
+def completion_shape_penalty(prediction: str, cfg: RewardPenaltyConfig | None = None) -> tuple[float, str]:
+    """Return (penalty, tag) where tag is empty | invalid | valid."""
+
+    cfg = cfg or RewardPenaltyConfig()
+    sid = normalize_sid(prediction)
+    if not sid:
+        return cfg.empty_completion, "empty"
+    if not looks_like_sid(prediction):
+        return cfg.invalid_sid, "invalid"
+    return 0.0, "valid"
+
+
+def compute_group_training_rewards(
+    completions: list[str],
+    targets: list[str],
+    group_keys: list[Any],
+    *,
+    penalty_cfg: RewardPenaltyConfig | None = None,
+) -> dict[str, Any]:
+    """Group-aware MiniOneRec ranking reward + empty/invalid shaping.
+
+    Mirrors original rule + ndcg ranking, then adds:
+    - empty completion penalty
+    - invalid SID penalty
+    """
+
+    penalty_cfg = penalty_cfg or RewardPenaltyConfig()
+    n = len(completions)
+    rule_rewards = [float(normalize_sid(p) == normalize_sid(t) and normalize_sid(t) != "") for p, t in zip(completions, targets, strict=True)]
+    ranking_rewards = [0.0] * n
+    shape_penalties = [0.0] * n
+    shape_tags = [""] * n
+    group_has_hit = [0.0] * n
+
+    for i, pred in enumerate(completions):
+        pen, tag = completion_shape_penalty(pred, penalty_cfg)
+        shape_penalties[i] = pen
+        shape_tags[i] = tag
+
+    groups: dict[Any, list[int]] = defaultdict(list)
+    for idx, key in enumerate(group_keys):
+        groups[key].append(idx)
+
+    for indices in groups.values():
+        hit = any(rule_rewards[idx] > 0 for idx in indices)
+        if not hit:
+            continue
+        for idx in indices:
+            group_has_hit[idx] = 1.0
+        discounts = ndcg_penalties(len(indices))
+        for local_rank, idx in enumerate(indices):
+            if rule_rewards[idx] == 0:
+                ranking_rewards[idx] = discounts[local_rank]
+
+    total_rewards = [
+        rule_rewards[i] + ranking_rewards[i] + shape_penalties[i] for i in range(n)
+    ]
+    return {
+        "total_rewards": total_rewards,
+        "rule_rewards": rule_rewards,
+        "ranking_rewards": ranking_rewards,
+        "shape_penalties": shape_penalties,
+        "shape_tags": shape_tags,
+        "group_has_hit": group_has_hit,
+        "invalid_sid": [float(tag != "valid") for tag in shape_tags],
+        "empty_completion": [float(tag == "empty") for tag in shape_tags],
+    }
 
 
 def compute_score(

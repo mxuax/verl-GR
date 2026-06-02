@@ -43,9 +43,41 @@ class MiniOneRecTask(RecipeTaskRuntime):
             custom_cfg["num_generations_per_prompt"] = base_generations_per_prompt
         rollout_cfg["n"] = base_generations_per_prompt * max(1, beam_size)
 
+    def configure_training_optimizations(self, config) -> None:
+        """Enable completion-only logprob for actor/ref with role-specific fast paths."""
+        from verl_gr.workers.engine.minionerec_engine_patch import apply_minionerec_engine_patches
+
+        apply_minionerec_engine_patches()
+        actor_rollout_ref = config.actor_rollout_ref
+        actor_cfg = actor_rollout_ref.get("actor")
+        if actor_cfg is not None:
+            with open_dict(actor_cfg):
+                engine_cfg = actor_cfg.get("engine_config")
+                if engine_cfg is None:
+                    actor_cfg.engine_config = OmegaConf.create({})
+                    engine_cfg = actor_cfg.engine_config
+                with open_dict(engine_cfg):
+                    engine_cfg.completion_only_logprob = True
+                optim_cfg = actor_cfg.get("optim")
+                if optim_cfg is not None:
+                    with open_dict(optim_cfg):
+                        optim_cfg.optimizer = "paged_adamw_32bit"
+
+        ref_cfg = actor_rollout_ref.get("ref")
+        if ref_cfg is not None:
+            with open_dict(ref_cfg):
+                engine_cfg = ref_cfg.get("engine_config")
+                if engine_cfg is None:
+                    ref_cfg.engine_config = OmegaConf.create({})
+                    engine_cfg = ref_cfg.engine_config
+                with open_dict(engine_cfg):
+                    # Ref still uses completion-only, but mixin routes it to padded+logits_to_keep.
+                    engine_cfg.completion_only_logprob = True
+
     def configure_rollout(self, config) -> None:
         if config.actor_rollout_ref.rollout.get("name") != "constrained_beam":
             return
+        self.configure_training_optimizations(config)
         register_constrained_beam_replica()
         register_constrained_beam_rollout_class()
         OmegaConf.update(

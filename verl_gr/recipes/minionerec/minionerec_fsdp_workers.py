@@ -29,6 +29,9 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
+        from verl_gr.workers.engine.minionerec_engine_patch import apply_minionerec_engine_patches
+
+        apply_minionerec_engine_patches()
         actor_strategy = str(
             self.config.actor.get("strategy", "")
             or self.config.actor.get("engine_config", {}).get("strategy", "")

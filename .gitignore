@@ -48,6 +48,13 @@ env/
 logs/
 tmp_ray/
 outputs/
+profiles/
+
+# Nsight Systems profiling artifacts (under nsys/ or next to -o prefix)
+nsys/
+*.nsys-rep
+*.nsys-rep.*
+*.qdrep
 
 # Jupyter
 .ipynb_checkpoints/

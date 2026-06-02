@@ -12,7 +12,8 @@
 #   WANDB_MODE=offline bash scripts/run_minionerec_grpo.sh \
 #     trainer.save_freq=50 actor_rollout_ref.actor.use_dynamic_bsz=false
 #
-# 冒烟仍可提高 trainer.save_freq / 限制样本：data.train_max_samples=16 data.val_max_samples=8
+# 冒烟仍可提高 trainer.save_freq / 限制样本：data.train_max_samples=64 data.val_max_samples=0
+# MiniOneRec 与 rl.sh 对齐入口：bash scripts/run_minionerec_grpo_rl_aligned.sh
 # -----------------------------------------------------------------------------
 
 set -euo pipefail

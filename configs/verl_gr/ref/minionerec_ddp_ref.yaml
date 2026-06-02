@@ -16,3 +16,4 @@ engine_config:
   model_dtype: bf16
   use_torch_compile: true
   seed: 42
+  completion_only_logprob: true

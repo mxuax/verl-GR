@@ -101,6 +101,32 @@ Validation should follow `MiniOneRec/evaluate.py`:
 | train/eval grouped generations | verl GRPO rollout `n` expanded by `beam_width` and validation `all_beams` |
 | train-time HR/NDCG logging | `verl_gr.recipes.minionerec.minionerec_trainer.minionerec_validate` |
 
+## Training launch
+
+- **Recommended**: `bash scripts/run_minionerec_grpo_rl_aligned.sh` (DDP, aligned with `MiniOneRec/rl.sh`).
+- **Generic**: `bash scripts/run_minionerec_grpo.sh` with `CONFIG_NAME=minionerec/grpo_trainer_ddp`.
+- Script index: [scripts/README.md](../../scripts/README.md).
+- PR-level summary vs `main`: [minionerec_pr_changes.md](./minionerec_pr_changes.md).
+
+## Performance optimizations (vs naive verl port)
+
+| Optimization | Implementation |
+| --- | --- |
+| Completion-only logprob | `CompletionOnlyLogprobMixin` — ref uses `logits_to_keep` (padded); actor uses rmpad + completion indices. |
+| Optimizer | `paged_adamw_32bit` (`verl_gr/workers/optimizer.py`) for actor. |
+| Skip old logprob forward | `minionerec_reinforce` + `RLTrainer._compute_old_log_prob` bypass. |
+| Memory | `use_remove_padding`, `entropy_from_logits_with_chunking`, `entropy_checkpointing`. |
+| Profiling | Shared NVTX names; `scripts/compare_nsys_nvtx.py` for A/B vs MiniOneRec traces. |
+
+## Reward shaping (training)
+
+Configured under `task.reward_penalties` in `grpo_trainer_ddp.yaml`:
+
+- `empty_completion: -1.0`
+- `invalid_sid: -0.5`
+
+Applied in `compute_group_training_rewards()` during trainer reward postprocess (not in per-sample `compute_score` alone).
+
 ## Known Intentional Differences
 
 - TRL `ReReTrainer._prepare_inputs` is not reused; verl owns rollout,
