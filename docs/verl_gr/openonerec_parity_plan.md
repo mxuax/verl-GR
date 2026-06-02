@@ -10,6 +10,7 @@ This checklist tracks old-vs-new behavior parity for the cleaned-up Phase B runt
 - [x] Two-stage rollout route resolves to the OneRec custom FSDP worker mapping
 - [x] Two-stage rollout implementation lives under `workers/rollout` instead of the removed `components` layer
 - [x] Async two-stage request grouping is implemented from `verl-GR` custom agent-loop classes
+- [x] Two-stage beam expansion/cache is implemented at rollout-server layer (`TwoStagevLLMHttpServer`), not trainer-side Python loops
 - [x] No local patch to upstream `verl` is required for OpenOneRec two-stage wiring
 
 ## Runtime/Worker Assumptions
@@ -19,6 +20,7 @@ This checklist tracks old-vs-new behavior parity for the cleaned-up Phase B runt
 - OpenOneRec-specific preparation stays under `recipes/openonerec`.
 - Worker route strings intentionally mirror OpenOneRec legacy names for traceability.
 - The async route is allowed to add a small `verl`-API-shaped shim inside `verl-GR` when upstream extension points are too coarse.
+- Performance-critical decoding is owned by `workers/rollout/*_vllm_async.py`; agent loop owns request grouping only.
 
 ## Validation Gate (Smoke)
 

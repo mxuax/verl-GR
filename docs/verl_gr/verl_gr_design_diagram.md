@@ -7,6 +7,8 @@ runtime after the recipe refactor. The main path is:
 2. `RecipeTaskRuntime` or a recipe task prepares tokenizer, processor, worker class, and rollout registration.
 3. `RLTrainer` delegates recipe-specific generation and validation through `TrainerTaskAdapter`.
 4. Custom beam workloads register rollout replicas and async agent loops under `verl_gr.workers.rollout`.
+   Beam expansion itself runs in rollout-server classes (engine side), while
+   agent loops focus on request grouping and metadata routing.
 
 ```mermaid
 classDiagram
@@ -229,10 +231,16 @@ RankGRPOAlgorithm ..> RankGRPOReward : per rank rewards
   `OpenOneRecAgentLoopManager`. Its dataset, reward, and task runtime still live
   in `verl_gr/recipes/openonerec/onerec_recipe.py`; validation and checkpoint
   pruning live in `verl_gr/recipes/openonerec/onerec_trainer.py`.
+  The two-stage beam decode is executed in
+  `workers/rollout/two_stage_vllm_async.py::TwoStagevLLMHttpServer`
+  (stage cache + semaphore + beam backend), not inside trainer-side Python loops.
 - MiniOneRec uses `MiniOneRecTask` to register `constrained_beam`, select
   `MiniOneRecActorRolloutRefWorker`, and wire `MiniOneRecConstrainedBeamAgentLoopManager`.
   Dataset, reward, format helpers, worker shim, agent loop, and trainer adapter
   are separate recipe modules under `verl_gr/recipes/minionerec`.
+  For DDP-aligned training, MiniOneRec agent loop routes generation to
+  `hf_constrained_beam_generate` on worker side (HF `model.generate()` path);
+  async constrained-vLLM remains available via rollout-server classes.
 - Rank-GRPO keeps rollout on the upstream vanilla `vllm` path. Its recipe code is
   now split across `rankgrpo_dataset.py`, `rankgrpo_task.py`,
   `rankgrpo_algorithm.py`, `rankgrpo_trainer.py`, `rankgrpo_reward.py`, and
@@ -257,6 +265,8 @@ RankGRPOAlgorithm ..> RankGRPOReward : per rank rewards
 - `verl_gr.workers.rollout` contains the reusable beam-search infrastructure:
   registration helpers, two async vLLM server subclasses, rollout adapter classes,
   and the shared async beam backend used by both beam-search recipes.
+  This is the current performance-critical decode layer replacing the old
+  high-level Python-only beam orchestration idea.
 
 ## Diagram Legend
 

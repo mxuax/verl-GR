@@ -16,8 +16,11 @@ rewritten to fit the verl rollout and reward pipeline.
 
 ## Dataset Contract
 
-The first verl-GR implementation supports the MiniOneRec `SidDataset` main
-recommendation task.
+Current `verl-GR` MiniOneRec runtime supports both:
+
+- main recommendation task (`SidDataset` equivalent), and
+- alignment tasks (`RLTitle2SidDataset`, `RLSeqTitle2SidDataset`) through
+  `include_alignment_tasks` and `seq_title_sample`.
 
 - Input CSV fields: `history_item_sid`, `item_sid`, optional `history_item_id`,
   `item_id`, `user_id`, `history_item_title`, and `item_title`.
@@ -36,11 +39,6 @@ The user has interacted with items <sid history> in chronological order. Can you
 - Reward routing keeps enough metadata to reconstruct MiniOneRec's
   `prompt2history` and `history2target` behavior: `history_key`,
   `target_sid`, `dedup`, and row index.
-
-Auxiliary RL alignment datasets from MiniOneRec, such as `RLTitle2SidDataset`
-and `RLSeqTitle2SidDataset`, are intentionally left as follow-up work. Their
-prompt templates and target formatting should be ported from `data.py` before
-enabling them.
 
 ## Constrained Decoding Contract
 
@@ -62,10 +60,21 @@ The original `ConstrainedLogitsProcessor`:
 - returns an empty allowed-token list when the prefix is not in the trie;
 - optionally forces EOS when no allowed token exists.
 
-The verl-GR implementation cannot reuse HuggingFace `LogitsProcessor` directly
-inside async vLLM. It instead mirrors the same prefix-trie semantics inside the
-Python beam backend. Beam state must be per-candidate, not a shared global
-counter, because async beam expansion runs candidates concurrently.
+Current `verl-GR` implementation has **two generation paths**:
+
+1. **DDP-aligned HF constrained beam path (default for MiniOneRec training)**  
+   - Agent loop (`constrained_beam_agent_loop.py`) groups prompts and calls
+     `worker_group.hf_constrained_beam_generate(...)`.
+   - Worker-side generation (`minionerec_fsdp_workers.py`) uses
+     `HfConstrainedBeamGenerator` + `model.generate()` with trie constraints.
+   - This path is chosen to stay close to MiniOneRec original behavior and
+     avoid async Python beam fan-out overhead.
+
+2. **Async vLLM constrained-beam path (rollout engine extension)**  
+   - Implemented in `workers/rollout/constrained_beam_vllm_async.py`.
+   - Constrained beam search is executed inside `ConstrainedBeamvLLMHttpServer`
+     (cache + inflight semaphore + beam backend), not in trainer-side logic.
+   - Shared beam kernel is `workers/rollout/beam_backend.py::run_async_beam_search`.
 
 ## Reward Contract
 
@@ -96,9 +105,9 @@ Validation should follow `MiniOneRec/evaluate.py`:
 | MiniOneRec behavior | verl-GR implementation target |
 | --- | --- |
 | `SidDataset` | `verl_gr.recipes.minionerec.minionerec_dataset.MiniOneRecDataset` |
-| `ConstrainedLogitsProcessor` | `verl_gr.workers.rollout.constraints.PrefixTrieConstraint` plus constrained `run_async_beam_search` |
+| `ConstrainedLogitsProcessor` | HF path: `recipes/minionerec/hf_constrained_generation.py`; async vLLM path: `workers/rollout/constraints.py` + `run_async_beam_search` |
 | `rule_reward`, `ndcg_rule_reward` | `verl_gr.recipes.minionerec.minionerec_reward.compute_score` |
-| train/eval grouped generations | verl GRPO rollout `n` expanded by `beam_width` and validation `all_beams` |
+| train/eval grouped generations | DDP HF path groups prompts in agent loop and reassembles per-rank beam outputs; async path uses beam group cache in rollout server |
 | train-time HR/NDCG logging | `verl_gr.recipes.minionerec.minionerec_trainer.minionerec_validate` |
 
 ## Training launch
@@ -131,8 +140,8 @@ Applied in `compute_group_training_rewards()` during trainer reward postprocess 
 
 - TRL `ReReTrainer._prepare_inputs` is not reused; verl owns rollout,
   log-prob recomputation, reference policy, and advantage calculation.
-- HuggingFace full-vocabulary logits masking is not available in the current
-  async vLLM path. The first implementation filters vLLM top-logprobs in Python
-  and records empty/missed constraint statistics.
+- Async vLLM constrained-beam still depends on vLLM top-logprobs exposure and
+  constrained token filtering in rollout server code; this can differ from
+  HF `generate()` constrained behavior in edge cases.
 - Remote experiments remain required for throughput and parity validation
   because local dependencies and hardware cannot run MiniOneRec training.

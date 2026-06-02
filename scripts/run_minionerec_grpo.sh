@@ -2,8 +2,8 @@
 # MiniOneRec GRPO runtime launcher for verl-GR.
 
 # -----------------------------------------------------------------------------
-# 八卡示例（默认走 MiniOneRec DDP 配置，并与 MiniOneRec/rl.sh 对齐：batch 64、epochs 2、
-# lr 1e-5、beam 16、temperature 1.0、Industrial CSV；在 verl-GR 根目录执行）：
+# 8-GPU example (MiniOneRec DDP config, aligned with MiniOneRec/rl.sh: batch 64, 2 epochs,
+# lr 1e-5, beam 16, temperature 1.0, Industrial CSV). Run from verl-GR root:
 #
 #   cd /path/to/verl-GR
 #   BASE_MODEL=/home/dyvm6xra/dyvm6xrauser49/xms-gr/MiniOneRec/output_dir/xxx/checkpoint-390 \
@@ -12,8 +12,8 @@
 #   WANDB_MODE=offline bash scripts/run_minionerec_grpo.sh \
 #     trainer.save_freq=50 actor_rollout_ref.actor.use_dynamic_bsz=false
 #
-# 冒烟仍可提高 trainer.save_freq / 限制样本：data.train_max_samples=64 data.val_max_samples=0
-# MiniOneRec 与 rl.sh 对齐入口：bash scripts/run_minionerec_grpo_rl_aligned.sh
+# Smoke test: increase trainer.save_freq or cap samples: data.train_max_samples=64 data.val_max_samples=0
+# MiniOneRec rl.sh-aligned entry: bash scripts/run_minionerec_grpo_rl_aligned.sh
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -54,7 +54,7 @@ ITEM_META_FILE="${ITEM_META_FILE:-${VERL_GR_ROOT}/../MiniOneRec/data/Amazon/inde
 CATEGORY="${CATEGORY:-Industrial_and_Scientific}"
 BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 
-# rl.sh: num_generations=16 → beam 宽度对齐；temperature=1.0；train_batch_size=64；epochs=2；lr=1e-5
+# rl.sh: num_generations=16 -> beam width; temperature=1.0; train_batch_size=64; epochs=2; lr=1e-5
 BEAM_WIDTH="${BEAM_WIDTH:-16}"
 ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-128}"
 LOGPROBS_MULTIPLIER="${LOGPROBS_MULTIPLIER:-2}"
@@ -261,13 +261,13 @@ echo "==================================="
   "$@"
 
 # -----------------------------------------------------------------------------
-# 动态 batch（verl 默认语义，变长序列更省显存）：在 Hydra 末尾覆盖 use_dynamic_bsz，
-# 切勿同时传入 use_dynamic_bsz=false。
+# Dynamic batching (verl default; better for variable-length sequences): override use_dynamic_bsz at the end of Hydra.
+# Do not pass use_dynamic_bsz=false at the same time.
 #
 #   ... bash scripts/run_minionerec_grpo.sh \
 #     actor_rollout_ref.actor.use_dynamic_bsz=true \
 #     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true
 #
-# （第二个参数与 actor 联动时可省略；显式写上更清晰。）
+# (Second arg can be omitted when tied to actor; explicit is clearer.)
 # -----------------------------------------------------------------------------
 

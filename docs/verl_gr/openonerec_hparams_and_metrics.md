@@ -5,7 +5,7 @@ This document summarizes the important hyperparameters, validation metrics, and 
 The key compatibility goal is that both runtimes use the same training reward semantics, even though their rollout, metric aggregation, and logging paths differ:
 
 - Legacy OpenOneRec uses its forked `verl` 0.5.0 runtime and a synchronous/custom vLLM two-stage rollout path.
-- `verl-GR` uses the current upstream `verl` branch with an async agent-loop rollout path and a `verl-GR` internal two-stage beam backend.
+- `verl-GR` uses the current upstream `verl` branch with an async agent-loop rollout path, while the actual two-stage beam decoding runs in rollout-server classes (`TwoStagevLLMHttpServer`) plus shared beam backend.
 
 ## Runtime Comparison
 
@@ -15,7 +15,7 @@ The key compatibility goal is that both runtimes use the same training reward se
 | Trainer entrypoint | `recipe.onerec.main_onerec_ppo` | `verl_gr.trainers.main_ppo` |
 | Trainer extension | `recipe.onerec.onerec_ray_trainer` | `verl_gr.trainers.rl_trainer.RLTrainer` |
 | Reward function | `recipe/onerec/onerec_recipe.py::compute_score` | `verl_gr/recipes/openonerec/onerec_recipe.py::compute_score` |
-| Rollout path | legacy two-stage vLLM rollout | async two-stage agent-loop rollout |
+| Rollout path | legacy two-stage vLLM rollout | async agent-loop routing + rollout-server two-stage beam decode |
 | `verl` version line | forked `verl` 0.5.0 | current upstream `verl` branch |
 | vLLM use | legacy synchronous/custom beam path | async server plus `verl-GR` beam backend |
 
@@ -216,7 +216,7 @@ Some metrics have the same names across the two runtimes but are not perfectly c
 
 | Area | Why it is version-sensitive |
 | --- | --- |
-| Beam search output | Legacy OpenOneRec uses an older vLLM/`verl` path. `verl-GR` uses async two-stage rollout and an internal beam loop. Candidate order, duplicate handling, and returned beams can differ. |
+| Beam search output | Legacy OpenOneRec uses an older vLLM/`verl` path. `verl-GR` uses async request grouping but server-side beam decode/cache/semaphore logic. Candidate order, duplicate handling, and returned beams can differ. |
 | `score` and validation metrics | The reward function is semantically aligned, but it is applied to outputs produced by different rollout implementations. Different beams can produce different `score` values. |
 | `actor/kl_loss` magnitude | Newer upstream `verl` uses `Metric` aggregation with data-parallel and global token-aware normalization. Legacy OpenOneRec logs actor micro-batch scalars more directly. Same tag name does not guarantee identical aggregation semantics. |
 | TensorBoard sparsity | Validation tags are only emitted at `test_freq` steps. Actor tags are emitted only when actor update metrics exist. Training scalar logging itself is simple, but some keys may not exist on every step. |
