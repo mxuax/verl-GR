@@ -150,6 +150,10 @@ class OneRecDataset(Dataset):
             self.data_files = target_files
 
     def _read_files_and_tokenize(self) -> None:
+        if not self.data_files:
+            self.dataframe = datasets.Dataset.from_list([])
+            logger.info("dataset len: 0 (no data files configured)")
+            return
         dataframes: list[datasets.Dataset] = []
         for parquet_file in self.data_files:
             dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]

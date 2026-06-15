@@ -1,0 +1,21 @@
+# Optional LoRA defaults for verl-GR recipes.
+# Training stays full-parameter unless lora_rank > 0 or lora_adapter_path is set.
+#
+# Usage (Hydra):
+#   defaults:
+#     - /model@actor_rollout_ref.model: lora_defaults
+#
+# Or override at launch:
+#   actor_rollout_ref.model.lora_rank=16
+#   actor_rollout_ref.model.lora_alpha=32
+#   actor_rollout_ref.model.target_modules=all-linear
+#   actor_rollout_ref.model.lora_adapter_path=/path/to/adapter
+
+lora_rank: 0
+lora_alpha: 16
+target_modules: all-linear
+exclude_modules: null
+lora_adapter_path: null
+lora:
+  merge: false
+  rank: 0

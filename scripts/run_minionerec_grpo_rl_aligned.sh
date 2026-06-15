@@ -74,6 +74,15 @@ export PROJECT_NAME="${PROJECT_NAME:-MiniOneRec_RL}"
 export EXPERIMENT_NAME="${EXPERIMENT_NAME:-minionerec_grpo_rlsh4gpu_$(date +%Y%m%d_%H%M%S)}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
+# expand_rollout_counts sets rollout.n = num_generations_per_prompt * beam_width (see minionerec_recipe.py).
+# ray_trainer._update_actor uses ppo_mini_batch_size * rollout.n as actor mini_batch / global_batch_size.
+NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-1}"
+EFFECTIVE_ROLLOUT_N=$((NUM_GENERATIONS_PER_PROMPT * BEAM_WIDTH))
+EFFECTIVE_PPO_MINI_BATCH=$((TRAIN_BATCH_SIZE * EFFECTIVE_ROLLOUT_N))
+echo "Rollout: mode=${ROLLOUT_MODE} | Hydra ++rollout.n=1 -> effective rollout.n=${EFFECTIVE_ROLLOUT_N} (after expand_rollout_counts)"
+echo "Actor update: ppo_mini_batch_size=${TRAIN_BATCH_SIZE} -> effective=${EFFECTIVE_PPO_MINI_BATCH} (= TRAIN_BATCH_SIZE x effective rollout.n)"
+echo "Completions/step (prompts x beam): ${TRAIN_BATCH_SIZE} x ${BEAM_WIDTH} = $((TRAIN_BATCH_SIZE * BEAM_WIDTH))"
+
 # vLLM CuMemAllocator is incompatible with expandable_segments; keep this commented.
 # See https://github.com/pytorch/pytorch/issues/147851
 # export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

@@ -1,5 +1,6 @@
 defaults:
   - hf_model
+  - lora_defaults
   - _self_
 
 enable_activation_offload: true

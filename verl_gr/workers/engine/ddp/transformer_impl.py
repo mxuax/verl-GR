@@ -47,51 +47,77 @@ class _SimpleCheckpointManager:
         self.checkpoint_config = checkpoint_config
         self._model_config_path = model_config_path  # base HF model path for config export
 
+    @staticmethod
+    def _unwrap_model(model):
+        from torch.nn.parallel import DistributedDataParallel as DDP
+
+        return model.module if isinstance(model, DDP) else model
+
+    @staticmethod
+    def _is_peft_model(model) -> bool:
+        return hasattr(model, "peft_config")
+
     def save_checkpoint(self, *, local_path, hdfs_path=None, global_step=0, max_ckpt_to_keep=None, **_kwargs):
         os.makedirs(local_path, exist_ok=True)
         rank = torch.distributed.get_rank()
-        # Unwrap DDP to get the raw model
-        model = self.model.module if isinstance(self.model, DDP) else self.model
+        model = self._unwrap_model(self.model)
         if rank == 0:
-            # Raw state_dict for resuming training
             torch.save(model.state_dict(), os.path.join(local_path, "model.pt"))
             if self.optimizer is not None:
                 torch.save(self.optimizer.state_dict(), os.path.join(local_path, "optimizer.pt"))
             if self.lr_scheduler is not None:
                 torch.save(self.lr_scheduler.state_dict(), os.path.join(local_path, "lr_scheduler.pt"))
             torch.save({"global_step": global_step}, os.path.join(local_path, "extra.pt"))
-            # Also export HF format for evaluation (eval_compare_ckpts.py etc.)
             self._export_hf(model, local_path)
         torch.distributed.barrier()
 
     def _export_hf(self, model, local_path):
-        """Export the raw HF model as a HuggingFace checkpoint.
-
-        Writes ``huggingface/`` subdirectory with ``config.json``, weights,
-        and tokenizer files so that ``AutoModelForCausalLM.from_pretrained``
-        and downstream eval scripts can load the checkpoint directly.
-        """
+        """Export HuggingFace-compatible artifacts for eval / inference."""
         hf_dir = os.path.join(local_path, "huggingface")
         os.makedirs(hf_dir, exist_ok=True)
+        base_model = self._model_config_path
+
+        if self._is_peft_model(model):
+            adapter_dir = os.path.join(local_path, "lora_adapter")
+            os.makedirs(adapter_dir, exist_ok=True)
+            try:
+                model.save_pretrained(adapter_dir)
+                model.save_pretrained(hf_dir)
+                logger.info("Exported LoRA adapter to %s", adapter_dir)
+            except Exception:
+                logger.warning("Failed to save LoRA adapter to %s", adapter_dir, exc_info=True)
+            if base_model:
+                with open(os.path.join(local_path, "lora_base_model.txt"), "w", encoding="utf-8") as handle:
+                    handle.write(str(base_model).strip() + "\n")
+            self._copy_tokenizer_files(base_model, hf_dir)
+            return
+
         try:
             model.save_pretrained(hf_dir)
             logger.info("Exported HF checkpoint to %s", hf_dir)
         except Exception:
             logger.warning("Failed to save HF checkpoint to %s", hf_dir, exc_info=True)
-        # Copy tokenizer files from the base model if available
-        base_model = self._model_config_path
-        if base_model and os.path.isdir(base_model):
-            import shutil
-            for fname in os.listdir(base_model):
-                src = os.path.join(base_model, fname)
-                if not os.path.isfile(src):
-                    continue
-                if fname.startswith("tokenizer") or fname == "vocab.json" or fname == "merges.txt" or fname == "special_tokens_map.json" or fname == "added_tokens.json":
-                    shutil.copy2(src, hf_dir)
-                    logger.info("Copied %s to HF checkpoint", fname)
+        self._copy_tokenizer_files(base_model, hf_dir)
+
+    @staticmethod
+    def _copy_tokenizer_files(base_model, hf_dir):
+        if not base_model or not os.path.isdir(base_model):
+            return
+        import shutil
+
+        for fname in os.listdir(base_model):
+            src = os.path.join(base_model, fname)
+            if not os.path.isfile(src):
+                continue
+            if (
+                fname.startswith("tokenizer")
+                or fname in {"vocab.json", "merges.txt", "special_tokens_map.json", "added_tokens.json"}
+            ):
+                shutil.copy2(src, hf_dir)
+                logger.info("Copied %s to HF checkpoint", fname)
 
     def load_checkpoint(self, *, local_path, hdfs_path=None, del_local_after_load=True, **_kwargs):
-        model = self.model.module if isinstance(self.model, DDP) else self.model
+        model = self._unwrap_model(self.model)
         state_dict = torch.load(os.path.join(local_path, "model.pt"), map_location=device_name, weights_only=False)
         model.load_state_dict(state_dict)
         if self.optimizer is not None:
@@ -153,10 +179,12 @@ class DDPEngine(FSDPEngine):
             from verl.workers.engine.utils import enable_full_determinism
             enable_full_determinism(seed=getattr(self.engine_config, "seed", 42))
 
+        from verl_gr.utils.lora_config import is_lora_enabled, trainable_parameters
+
         # DDP has no parameter/optimizer offloading
         self._is_offload_param = False
         self._is_offload_optimizer = False
-        self._is_lora = self.model_config.lora_rank > 0
+        self._is_lora = is_lora_enabled(self.model_config)
 
         # QAT
         self._qat_config = getattr(self.engine_config, "qat", None)
@@ -271,7 +299,10 @@ class DDPEngine(FSDPEngine):
     # ------------------------------------------------------------------
 
     def _build_optimizer(self, module):
-        return build_actor_optimizer(module.parameters(), self.optimizer_config)
+        from verl_gr.utils.lora_config import trainable_parameters
+
+        params = trainable_parameters(module) if self._is_lora else module.parameters()
+        return build_actor_optimizer(params, self.optimizer_config)
 
     def optimizer_step(self):
         assert self.optimizer_config.clip_grad is not None
@@ -345,6 +376,11 @@ class DDPEngine(FSDPEngine):
 
         params = convert_weight_keys(params, module)
         return params.items(), peft_config
+
+    def disable_adapter(self):
+        """Delegate to the inner PEFT module (DDP wraps the PeftModel)."""
+        module = self.module.module if isinstance(self.module, DDP) else self.module
+        return module.disable_adapter()
 
     # ------------------------------------------------------------------
     # Overrides — device movement (simpler than FSDP)

@@ -127,6 +127,13 @@ actor_rollout_ref:
       ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
 
   model:
+    # LoRA is opt-in: lora_rank defaults to 0 (full-parameter training).
+    lora_rank: 0
+    lora_alpha: 16
+    target_modules: all-linear
+    lora_adapter_path: null
+    lora:
+      merge: false
     enable_activation_offload: true
     enable_gradient_checkpointing: true
     use_remove_padding: false

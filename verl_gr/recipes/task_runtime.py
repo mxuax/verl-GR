@@ -189,11 +189,36 @@ class RecipeTaskRuntime:
                     wrap_policy = fsdp_cfg.wrap_policy
                 wrap_policy.transformer_layer_cls_to_wrap = [layer_cls]
 
+    def configure_lora(self, config) -> None:
+        """Normalize optional LoRA settings; no-op when LoRA is disabled."""
+        from verl_gr.utils.lora_config import is_lora_enabled, normalize_lora_config
+
+        normalize_lora_config(config)
+        if not is_lora_enabled(config.actor_rollout_ref.model):
+            return
+
+        actor_strategy = self._ensure_role_strategy(config, "actor")
+        if actor_strategy != "ddp":
+            return
+
+        from omegaconf import open_dict
+
+        actor_cfg = config.actor_rollout_ref.actor
+        with open_dict(actor_cfg):
+            engine_cfg = actor_cfg.get("engine_config")
+            if engine_cfg is None:
+                actor_cfg.engine_config = OmegaConf.create({})
+                engine_cfg = actor_cfg.engine_config
+            with open_dict(engine_cfg):
+                if engine_cfg.get("ddp_find_unused_parameters") is None:
+                    engine_cfg.ddp_find_unused_parameters = True
+
     def prepare(self, config) -> dict[str, Any]:
         if not self._rollout_counts_expanded:
             self.expand_rollout_counts(config)
             self._rollout_counts_expanded = True
         self.configure_rollout(config)
+        self.configure_lora(config)
 
         reward_model_cfg = self.get_reward_model_cfg(config)
         local_path = copy_to_local(

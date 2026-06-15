@@ -20,6 +20,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 VERL_GR_ROOT="$(dirname "${SCRIPT_DIR}")"
+# shellcheck source=lora_env.sh
+source "${SCRIPT_DIR}/lora_env.sh"
 MINIONEREC_RECIPE_PATH="${VERL_GR_ROOT}/verl_gr/recipes/minionerec/minionerec_recipe.py"
 MINIONEREC_REWARD_PATH="${VERL_GR_ROOT}/verl_gr/recipes/minionerec/minionerec_reward.py"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -98,6 +100,8 @@ mkdir -p "${VAL_DATA_DIR}"
 
 export PYTHONPATH="${VERL_GR_ROOT}:${PYTHONPATH:-}"
 export WANDB_MODE
+# Async rollout + wandb 0.26 telemetry can crash on finish; see verl.utils.tracking._safe_wandb_finish
+export WANDB_DISABLE_TELEMETRY="${WANDB_DISABLE_TELEMETRY:-true}"
 export RAY_TMPDIR
 export TMPDIR="${RAY_TMPDIR}"
 export VERL_ZMQ_SOCKET_PREFIX
@@ -170,6 +174,12 @@ echo "Info: ${INFO_FILE}"
 echo "SID index: ${SID_INDEX_FILE}"
 echo "Item meta: ${ITEM_META_FILE}"
 echo "Beam width: ${BEAM_WIDTH} (rl.sh num_generations)"
+_NUM_GEN_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-1}"
+_EFFECTIVE_ROLLOUT_N=$((_NUM_GEN_PER_PROMPT * BEAM_WIDTH))
+_EFFECTIVE_PPO_MINI_BATCH=$((TRAIN_BATCH_SIZE * _EFFECTIVE_ROLLOUT_N))
+echo "Rollout mode: ${ROLLOUT_MODE} | Hydra ++rollout.n=1 -> effective rollout.n=${_EFFECTIVE_ROLLOUT_N} (expand_rollout_counts)"
+echo "Effective ppo_mini_batch_size: ${TRAIN_BATCH_SIZE} x ${_EFFECTIVE_ROLLOUT_N} = ${_EFFECTIVE_PPO_MINI_BATCH} (actor update chunk)"
+echo "Completions/step: ${TRAIN_BATCH_SIZE} prompts x ${BEAM_WIDTH} beam = $((TRAIN_BATCH_SIZE * BEAM_WIDTH))"
 echo "Decode mode (train/val): ${DECODE_MODE_TRAIN}/${DECODE_MODE_VAL}"
 echo "Train batch size: ${TRAIN_BATCH_SIZE} | epochs: ${TOTAL_EPOCHS} | lr: ${LEARNING_RATE}"
 echo "Task: ${TASK_NAME} (${TASK_CLASS_PATH})"
@@ -180,6 +190,14 @@ if [[ "${ENGINE_FAMILY}" == "fsdp" ]]; then
   echo "FSDP wrap layer: ${FSDP_TRANSFORMER_LAYERS}"
 fi
 echo "Item max tokens: ${ITEM_MAX_TOKENS}"
+if [[ "${#LORA_OVERRIDES[@]}" -gt 0 ]]; then
+  echo "LoRA: rank=${LORA_RANK} alpha=${LORA_ALPHA} target=${LORA_TARGET_MODULES} merge=${LORA_MERGE}"
+  if [[ -n "${LORA_ADAPTER_PATH}" ]]; then
+    echo "LoRA adapter: ${LORA_ADAPTER_PATH}"
+  fi
+else
+  echo "LoRA: disabled (full-parameter training)"
+fi
 echo "Output: ${OUTPUT_DIR}"
 echo "Ray tmp (short path for Unix socket limit): ${RAY_TMPDIR}"
 echo "ZMQ socket prefix: ${VERL_ZMQ_SOCKET_PREFIX}"
@@ -258,6 +276,7 @@ echo "==================================="
   ++global_profiler.save_path="${OUTPUT_DIR}/profiles" \
   ++critic.enable=False \
   "${ENGINE_OVERRIDES[@]}" \
+  "${LORA_OVERRIDES[@]}" \
   "$@"
 
 # -----------------------------------------------------------------------------

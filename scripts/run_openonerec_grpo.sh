@@ -6,6 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 VERL_GR_ROOT="$(dirname "${SCRIPT_DIR}")"
+# shellcheck source=lora_env.sh
+source "${SCRIPT_DIR}/lora_env.sh"
 PROJECT_ROOT="$(dirname "${VERL_GR_ROOT}")"
 OPENONEREC_RECIPE_PATH="${PROJECT_ROOT}/verl-GR/verl_gr/recipes/openonerec/onerec_recipe.py"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -122,6 +124,14 @@ echo "Validation target gpu util +/- tol: ${VALIDATION_TARGET_GPU_UTILIZATION}% 
 echo "Validation concurrency step: ${VALIDATION_CONCURRENCY_STEP}"
 echo "Agent loop workers: ${AGENT_LOOP_NUM_WORKERS}"
 echo "FSDP strategy: ${FSDP_STRATEGY}"
+if [[ "${#LORA_OVERRIDES[@]}" -gt 0 ]]; then
+  echo "LoRA: rank=${LORA_RANK} alpha=${LORA_ALPHA} target=${LORA_TARGET_MODULES} merge=${LORA_MERGE}"
+  if [[ -n "${LORA_ADAPTER_PATH}" ]]; then
+    echo "LoRA adapter: ${LORA_ADAPTER_PATH}"
+  fi
+else
+  echo "LoRA: disabled (full-parameter training)"
+fi
 echo "Output: ${OUTPUT_DIR}"
 echo "Ray temp dir: ${RAY_TMPDIR}"
 echo "Ray spill dir: ${RAY_SPILL_DIR}"
@@ -205,5 +215,6 @@ done
   actor_rollout_ref.ref.strategy="${FSDP_STRATEGY}" \
   actor_rollout_ref.actor.strategy="${FSDP_STRATEGY}" \
   critic.enable=False \
+  "${LORA_OVERRIDES[@]}" \
   "$@"
 
