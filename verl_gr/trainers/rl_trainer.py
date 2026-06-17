@@ -18,12 +18,6 @@ from verl.utils.torch_functional import masked_mean
 from verl.workers.utils.padding import left_right_2_no_padding
 
 from verl_gr.recipes.task_factory import load_object
-from verl_gr.recipes.openonerec.onerec_trainer import (
-    openonerec_evaluate_and_prune_checkpoint,
-    openonerec_dump_generations,
-    openonerec_maybe_log_val_generations,
-    openonerec_validate,
-)
 from verl_gr.recipes.rankgrpo.rankgrpo_algorithm import compute_rank_grpo_advantage, rankgrpo_enabled
 from verl_gr.recipes.rankgrpo.rankgrpo_trainer import RankGRPOTrainerAdapter
 from verl_gr.trainers.task_adapter import TrainerTaskAdapter
@@ -50,28 +44,6 @@ def _nvtx_range(name: str):
     finally:
         if enabled:
             torch.cuda.nvtx.range_pop()
-
-
-class _OpenOneRecTrainerAdapter(TrainerTaskAdapter):
-    def prepare_gen_batch(self, trainer, batch: DataProto) -> DataProto:
-        return trainer._prepare_recommendation_gen_batch(batch)
-
-    def validate(self, trainer):
-        return openonerec_validate(trainer)
-
-    def dump_generations(self, trainer, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
-        return openonerec_dump_generations(
-            trainer,
-            inputs=inputs,
-            outputs=outputs,
-            scores=scores,
-            reward_extra_infos_dict=reward_extra_infos_dict,
-            dump_path=dump_path,
-            ground_truths=ground_truths,
-        )
-
-    def maybe_log_val_generations(self, trainer, inputs, outputs, scores):
-        return openonerec_maybe_log_val_generations(trainer, inputs=inputs, outputs=outputs, scores=scores)
 
 
 def apply_kl_penalty(data: DataProto, kl_ctrl, kl_penalty: str = "kl"):
@@ -261,7 +233,13 @@ class RLTrainer(RayPPOTrainerBase):
         if hasattr(self, "_task_adapter"):
             return self._task_adapter
 
-        task_name = str(_cfg_get(_cfg_get(self.config, "task", None), "name", "")).lower()
+        task_cfg = _cfg_get(self.config, "task", None)
+        adapter_path = _cfg_get(task_cfg, "trainer_adapter_class", None)
+        if adapter_path:
+            self._task_adapter = load_object(str(adapter_path))()
+            return self._task_adapter
+
+        task_name = str(_cfg_get(task_cfg, "name", "")).lower()
         rollout_name = str(self.config.actor_rollout_ref.rollout.get("name", ""))
         if task_name == "rankgrpo":
             self._task_adapter = RankGRPOTrainerAdapter()
@@ -269,7 +247,8 @@ class RLTrainer(RayPPOTrainerBase):
             adapter_cls = load_object("verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter")
             self._task_adapter = adapter_cls()
         elif task_name == "openonerec":
-            self._task_adapter = _OpenOneRecTrainerAdapter()
+            adapter_cls = load_object("verl_gr.recipes.openonerec.onerec_trainer.OpenOneRecTrainerAdapter")
+            self._task_adapter = adapter_cls()
         else:
             self._task_adapter = TrainerTaskAdapter()
         return self._task_adapter

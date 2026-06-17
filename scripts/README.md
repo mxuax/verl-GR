@@ -1,5 +1,19 @@
 # Scripts
 
+## Full-training benchmark (loss + wall clock)
+
+| Script | Env | Purpose |
+| --- | --- | --- |
+| `benchmark/run_openonerec_benchmark.sh` | `vllm-gr` | OneRec-1.7B-pro, 2k train / 200 val subset |
+| `benchmark/run_minionerec_benchmark.sh` | `MiniOneRec` | checkpoint-390, Industrial_and_Scientific |
+
+See [docs/verl_gr/full_training_benchmark.md](../docs/verl_gr/full_training_benchmark.md).
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/benchmark/run_openonerec_benchmark.sh   # after: conda activate vllm-gr
+CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/benchmark/run_minionerec_benchmark.sh  # after: conda activate MiniOneRec
+```
+
 ## MiniOneRec GRPO (recommended)
 
 | Script | Purpose |

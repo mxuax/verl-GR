@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import math
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 # `python tests/foo.py` puts `tests/` first on sys.path, not the repo root — ensure root
 # (the directory that contains `verl_gr/`) is on sys.path.
-_p = Path(__file__).resolve().parent
+_p = Path(__file__).resolve().parents[2]
 while _p != _p.parent and not (_p / "verl_gr").is_dir():
     _p = _p.parent
 if (_p / "verl_gr").is_dir() and str(_p) not in sys.path:
@@ -20,7 +18,6 @@ import torch
 
 from verl.trainer.ppo.core_algos import agg_loss
 
-from verl_gr.trainers.rl_trainer import _prune_unkept_checkpoint_dirs
 from verl_gr.recipes.rankgrpo.rankgrpo_agent_loop import (
     _build_rankgrpo_sampling_params,
     _mask_rollout_logprobs,
@@ -33,7 +30,6 @@ from verl_gr.recipes.rankgrpo.rankgrpo_loss import (
 )
 from verl_gr.recipes.rankgrpo.rankgrpo_algorithm import (
     _compute_rank_grpo_completion_stats,
-    _rankgrpo_should_dump_debug_step,
     compute_rank_grpo_training_reward_metrics,
 )
 
@@ -243,30 +239,6 @@ def test_rankgrpo_completion_stats_match_trl_length_semantics():
     assert math.isclose(metrics["train/rankgrpo/items/eos_rate"], 2 / 3, rel_tol=1e-6, abs_tol=1e-6)
 
 
-def test_rankgrpo_debug_dump_step_filter():
-    old_debug = os.environ.get("VERL_GR_DEBUG")
-    old_steps = os.environ.get("VERL_GR_RANKGRPO_DEBUG_STEPS")
-    try:
-        os.environ["VERL_GR_DEBUG"] = "0"
-        os.environ["VERL_GR_RANKGRPO_DEBUG_STEPS"] = "2800,5000"
-        assert _rankgrpo_should_dump_debug_step(2800)
-        assert _rankgrpo_should_dump_debug_step(5000)
-        assert not _rankgrpo_should_dump_debug_step(3000)
-
-        os.environ["VERL_GR_DEBUG"] = "1"
-        os.environ.pop("VERL_GR_RANKGRPO_DEBUG_STEPS", None)
-        assert _rankgrpo_should_dump_debug_step(None)
-        assert _rankgrpo_should_dump_debug_step(123)
-    finally:
-        if old_debug is None:
-            os.environ.pop("VERL_GR_DEBUG", None)
-        else:
-            os.environ["VERL_GR_DEBUG"] = old_debug
-        if old_steps is None:
-            os.environ.pop("VERL_GR_RANKGRPO_DEBUG_STEPS", None)
-        else:
-            os.environ["VERL_GR_RANKGRPO_DEBUG_STEPS"] = old_steps
-
 
 def test_rankgrpo_sampling_params_match_trl_vllm_defaults():
     class _ValKwargs:
@@ -332,24 +304,6 @@ def test_mask_rollout_logprobs_zeros_tokens_after_eos():
     assert masked == [-0.1, -0.2, -0.3, 0.0, 0.0]
 
 
-def test_topk_pruning_removes_unkept_checkpoint_dirs():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ckpt_root = Path(tmpdir)
-        for step in [100, 200, 300, 400]:
-            (ckpt_root / f"global_step_{step}").mkdir()
-        (ckpt_root / "not_a_checkpoint").mkdir()
-
-        removed = _prune_unkept_checkpoint_dirs(
-            str(ckpt_root),
-            keep_paths={str(ckpt_root / "global_step_200"), str(ckpt_root / "global_step_400")},
-        )
-
-        assert sorted(Path(path).name for path in removed) == ["global_step_100", "global_step_300"]
-        assert not (ckpt_root / "global_step_100").exists()
-        assert (ckpt_root / "global_step_200").is_dir()
-        assert (ckpt_root / "global_step_400").is_dir()
-        assert (ckpt_root / "not_a_checkpoint").is_dir()
-
 
 if __name__ == "__main__":
     test_trl_clipped_pg_matches_manual_min_formulation()
@@ -358,10 +312,8 @@ if __name__ == "__main__":
     test_trl_match_agg_differs_from_dual_clip_when_negative_adv_and_large_ratio()
     test_rankgrpo_training_reward_metrics_match_trl_reward_total_semantics()
     test_rankgrpo_completion_stats_match_trl_length_semantics()
-    test_rankgrpo_debug_dump_step_filter()
     test_rankgrpo_sampling_params_match_trl_vllm_defaults()
     test_build_trl_completion_mask_matches_trl_formula()
     test_build_trl_completion_mask_no_eos_token_id_falls_back_to_all_ones()
     test_mask_rollout_logprobs_zeros_tokens_after_eos()
-    test_topk_pruning_removes_unkept_checkpoint_dirs()
-    print("test_rankgrpo_loss_modes: all checks passed")
+    print("rankgrpo test_loss: all checks passed")

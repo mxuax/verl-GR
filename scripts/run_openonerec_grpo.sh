@@ -15,10 +15,12 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
 
-# Cluster auto-discovery via Ray (fallback to single node defaults).
-RAY_INFO="$("${PYTHON_BIN}" -c "import ray; ray.init(address='auto', ignore_reinit_error=True); nodes=[n for n in ray.nodes() if n.get('Alive')]; gpus=next((int(n.get('Resources',{}).get('GPU',0)) for n in nodes if n.get('Resources',{}).get('GPU',0)>0),0); print(f'{len(nodes)} {gpus}')" 2>/dev/null || true)"
-N_NODES="${N_NODES:-$(echo "${RAY_INFO}" | awk '{print $1}')}"
-N_GPUS="${N_GPUS:-$(echo "${RAY_INFO}" | awk '{print $2}')}"
+# Cluster auto-discovery via Ray (skip when N_GPUS/N_NODES are preset — avoids hang on ray.init auto).
+if [[ -z "${N_GPUS:-}" || -z "${N_NODES:-}" ]]; then
+  RAY_INFO="$("${PYTHON_BIN}" -c "import ray; ray.init(address='auto', ignore_reinit_error=True); nodes=[n for n in ray.nodes() if n.get('Alive')]; gpus=next((int(n.get('Resources',{}).get('GPU',0)) for n in nodes if n.get('Resources',{}).get('GPU',0)>0),0); print(f'{len(nodes)} {gpus}')" 2>/dev/null || true)"
+  N_NODES="${N_NODES:-$(echo "${RAY_INFO}" | awk '{print $1}')}"
+  N_GPUS="${N_GPUS:-$(echo "${RAY_INFO}" | awk '{print $2}')}"
+fi
 if [[ -z "${N_NODES}" || -z "${N_GPUS}" || "${N_NODES}" == "0" ]]; then
   N_NODES=1
   # N_GPUS=2

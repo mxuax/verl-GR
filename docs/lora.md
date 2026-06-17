@@ -77,8 +77,7 @@ lora:
 
 ### 6. Tests
 
-- `tests/test_lora_config.py` — config parsing, adapter rank inference, script / source structure checks (11 cases).
-- `tests/test_lora_integration.py` — Hydra compose, checkpoint export, DDP optimizer trainable params (6 cases; some require CUDA / PEFT).
+- `tests/minionerec/test_lora.py` — LoRA config parsing, checkpoint export, DDP optimizer (GPU).
 
 ### 7. Incidental fix (`verl_gr/recipes/openonerec/onerec_recipe.py`)
 
@@ -132,7 +131,7 @@ actor_rollout_ref.model.lora_adapter_path=/path/to/adapter
 
 ## Test plan
 
-- [ ] `pytest tests/test_lora_config.py tests/test_lora_integration.py`
+- [ ] `pytest tests/minionerec/test_lora.py`
 - [ ] MiniOneRec GRPO with default config (`lora_rank=0`) matches `main` behavior
 - [ ] `LORA_RANK=16` MiniOneRec GRPO: logs show LoRA enabled and lower VRAM usage
 - [ ] After training, checkpoint contains `lora_adapter/adapter_config.json` and `lora_base_model.txt`

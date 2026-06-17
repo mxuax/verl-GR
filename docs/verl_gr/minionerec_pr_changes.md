@@ -72,14 +72,18 @@ Observed overhead: Nsight typically adds ~10–40% per step; ~1s on a ~4s step i
 | `tests/test_minionerec_completion_only_logprob.py` | `logits_to_keep` / nested logprob layout. |
 | `tests/test_minionerec_reward_penalties.py` | Empty / invalid SID shaping penalties. |
 
-Run locally:
+## Run tests (vllm-gr env)
 
 ```bash
-cd verl-GR
-PYTHONPATH="${PWD}:${PWD}/../verl" python tests/test_minionerec_parity.py
-PYTHONPATH="${PWD}:${PWD}/../verl" python tests/test_minionerec_completion_only_logprob.py
-PYTHONPATH="${PWD}:${PWD}/../verl" python tests/test_minionerec_reward_penalties.py
+conda activate vllm-gr
+export PYTHONPATH="$(pwd):$(pwd)/../verl"
+pytest tests/ -m "not gpu"
+
+# GPU node hk01dgx036, cards 4-7:
+CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/run_tests_gpu.sh
 ```
+
+See [tests/README.md](../tests/README.md) and [docs/verl_gr/architecture.md](../docs/verl_gr/architecture.md).
 
 ## 5. Scripts cleanup (this PR)
 

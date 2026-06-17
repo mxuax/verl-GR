@@ -1,11 +1,13 @@
-"""Integration tests for LoRA in verl-GR (CPU/GPU as available)."""
+"""LoRA behavior tests for MiniOneRec DDP path."""
 
 from __future__ import annotations
 
 import json
 import os
-import tempfile
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,8 +16,16 @@ import torch.nn as nn
 from omegaconf import OmegaConf
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from verl_gr.utils.lora_config import is_lora_enabled, normalize_lora_config
+from verl_gr.utils.lora_config import (
+    is_lora_enabled,
+    normalize_lora_config,
+    resolve_lora_rank,
+    should_merge_lora,
+    trainable_parameters,
+)
 from verl_gr.workers.engine.ddp.transformer_impl import _SimpleCheckpointManager
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _TinyLM(nn.Module):
@@ -36,16 +46,62 @@ def peft_available():
     return get_peft_model, LoraConfig
 
 
-def test_hydra_compose_minionerec_model_has_lora_defaults():
-    source = Path("configs/verl_gr/model/minionerec_hf_model.yaml").read_text(encoding="utf-8")
-    assert "lora_defaults" in source
-    assert "lora_rank" in Path("configs/verl_gr/model/lora_defaults.yaml").read_text(encoding="utf-8")
+def test_resolve_lora_rank_defaults_to_zero():
+    model_cfg = SimpleNamespace(lora_rank=0, lora={})
+    assert resolve_lora_rank(model_cfg) == 0
+
+
+def test_resolve_lora_rank_prefers_nested_rank():
+    model_cfg = SimpleNamespace(lora_rank=8, lora={"rank": 16})
+    assert resolve_lora_rank(model_cfg) == 16
+
+
+def test_is_lora_enabled_with_adapter_path_only():
+    model_cfg = SimpleNamespace(lora_rank=0, lora={}, lora_adapter_path="/tmp/adapter")
+    assert is_lora_enabled(model_cfg) is True
+
+
+def test_should_merge_lora_default_false():
+    model_cfg = SimpleNamespace(lora={"merge": False})
+    assert should_merge_lora(model_cfg) is False
+
+
+def test_trainable_parameters_filters_frozen():
+    model = nn.Linear(4, 2)
+    for param in model.parameters():
+        param.requires_grad = False
+    model.bias.requires_grad = True
+    assert len(trainable_parameters(model)) == 1
+
+
+def test_normalize_lora_config_infers_rank_from_adapter(tmp_path):
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    (adapter_dir / "adapter_config.json").write_text('{"r": 32}', encoding="utf-8")
+
+    config = OmegaConf.create(
+        {
+            "actor_rollout_ref": {
+                "model": {
+                    "lora_rank": 0,
+                    "lora_adapter_path": str(adapter_dir),
+                    "use_shm": False,
+                }
+            }
+        }
+    )
+    with patch("verl.utils.fs.copy_to_local", return_value=str(adapter_dir)):
+        normalize_lora_config(config)
+    assert config.actor_rollout_ref.model.lora_rank == 32
+
+
+def test_normalize_lora_config_noop_when_disabled():
+    config = OmegaConf.create({"actor_rollout_ref": {"model": {"lora_rank": 0}}})
+    normalize_lora_config(config)
+    assert config.actor_rollout_ref.model.lora_rank == 0
 
 
 def test_lora_override_applies_via_main_ppo():
-    import subprocess
-    import sys
-
     out = subprocess.check_output(
         [
             sys.executable,
@@ -57,17 +113,11 @@ def test_lora_override_applies_via_main_ppo():
             "--cfg",
             "job",
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=REPO_ROOT,
         stderr=subprocess.STDOUT,
         text=True,
     )
     assert "lora_rank: 8" in out
-
-
-def test_normalize_lora_config_noop_when_disabled():
-    config = OmegaConf.create({"actor_rollout_ref": {"model": {"lora_rank": 0}}})
-    normalize_lora_config(config)
-    assert config.actor_rollout_ref.model.lora_rank == 0
 
 
 def test_simple_checkpoint_manager_exports_lora_adapter(peft_available, tmp_path):
@@ -79,7 +129,8 @@ def test_simple_checkpoint_manager_exports_lora_adapter(peft_available, tmp_path
         base,
         LoraConfig(r=4, lora_alpha=8, target_modules=["c_attn"], task_type="CAUSAL_LM"),
     )
-    ddp_model = DDP(model, device_ids=[0]) if torch.cuda.is_available() else model
+    # Checkpoint manager unwraps DDP; avoid DDP here without a full distributed init.
+    ddp_model = model
 
     mgr = _SimpleCheckpointManager(
         model=ddp_model,
@@ -117,19 +168,21 @@ def test_simple_checkpoint_manager_full_model_path_unchanged(tmp_path):
     assert not (ckpt_dir / "lora_adapter").exists()
 
 
+@pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_ddp_lora_optimizer_only_trainable_params(peft_available):
     get_peft_model, LoraConfig = peft_available
     from verl.workers.config import FSDPOptimizerConfig
+    from verl.workers.config.model import HFModelConfig
+    from verl_gr.workers.config.ddp_engine import DDPEngineConfig
     from verl_gr.workers.engine.ddp.transformer_impl import DDPEngine
 
     if not torch.distributed.is_initialized():
         os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
         os.environ.setdefault("MASTER_PORT", "29517")
-        torch.distributed.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo", rank=0, world_size=1)
-
-    from verl.workers.config.model import HFModelConfig
-    from verl_gr.workers.config.ddp_engine import DDPEngineConfig
+        torch.distributed.init_process_group(
+            backend="nccl" if torch.cuda.is_available() else "gloo", rank=0, world_size=1
+        )
 
     model_cfg = HFModelConfig(
         path="gpt2",
