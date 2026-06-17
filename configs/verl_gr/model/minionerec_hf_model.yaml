@@ -2,7 +2,8 @@ defaults:
   - hf_model
   - _self_
 
-enable_activation_offload: true
+# verl's activation offload implementation only supports FSDP/FSDP2.
+enable_activation_offload: false
 enable_gradient_checkpointing: true
 use_remove_padding: true
 use_fused_kernels: false

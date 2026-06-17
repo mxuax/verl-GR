@@ -274,8 +274,15 @@ def test_local_ddp_actor_and_ref_groups_are_concrete():
     assert "defaults:\n  - ddp_ref" in minionerec_ref_source
     assert "forward_only: true" in minionerec_ref_source
     assert "defaults:\n  - hf_model" in minionerec_model_source
+    assert "enable_activation_offload: false" in minionerec_model_source
     assert "enable_gradient_checkpointing: true" in minionerec_model_source
     assert "external_lib: verl_gr.workers.engine.ddp" in minionerec_model_source
+
+
+def test_ddp_engine_rejects_unsupported_activation_offload():
+    source = _read_text("verl_gr/workers/engine/ddp/transformer_impl.py")
+    assert "DDP engine does not support actor_rollout_ref.model.enable_activation_offload" in source
+    assert 'enable_activation_offloading(module, "ddp")' not in source
 
 
 def test_ddp_actor_config_updates_frozen_engine_strategy_safely():
