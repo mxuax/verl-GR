@@ -23,6 +23,12 @@ import torch
 import torch.distributed as dist
 
 
+def _format_examples(values: list[str], limit: int = 5) -> str:
+    shown = values[:limit]
+    suffix = "" if len(values) <= limit else f", ... (+{len(values) - limit} more)"
+    return f"{shown}{suffix}"
+
+
 def _load_rank_shard(ckpt_path: str, rank: int, world_size: int):
     """Load the model state dict shard for *rank* from the FSDP checkpoint."""
     shard_path = os.path.join(ckpt_path, f"model_world_size_{world_size}_rank_{rank}.pt")
@@ -45,26 +51,25 @@ def _merge_fsdp2_state_dicts(shards: list[dict], world_size: int) -> dict[str, t
     all_keys = sorted(set().union(*(s.keys() for s in shards)))
 
     for key in all_keys:
+        missing_ranks = [rank for rank, shard in enumerate(shards) if key not in shard]
+        if missing_ranks:
+            raise KeyError(
+                f"Checkpoint key {key!r} is missing from ranks {missing_ranks}. "
+                "Refusing to merge an incomplete FSDP checkpoint."
+            )
+
         rank_tensors = []
         for shard in shards:
-            if key not in shard:
-                break
             val = shard[key]
             if isinstance(val, DTensor):
                 rank_tensors.append(val._local_tensor)
             elif isinstance(val, torch.Tensor):
                 rank_tensors.append(val)
             else:
-                break
-
-        if len(rank_tensors) != world_size:
-            # Non-sharded param (same on all ranks) — just use first
-            for shard in shards:
-                if key in shard:
-                    val = shard[key]
-                    merged[key] = val._local_tensor.clone() if isinstance(val, DTensor) else val.clone()
-                    break
-            continue
+                raise TypeError(
+                    f"Unsupported value type for checkpoint key {key!r}: {type(val).__name__}. "
+                    "Expected torch.Tensor or DTensor."
+                )
 
         # DTensor with Shard(0) placement — concatenate along dim 0
         sample = shards[0][key]
@@ -79,6 +84,52 @@ def _merge_fsdp2_state_dicts(shards: list[dict], world_size: int) -> dict[str, t
             merged[key] = rank_tensors[0].clone()
 
     return merged
+
+
+def _strip_fsdp_prefix(key: str) -> str:
+    for prefix in ("_fsdp_wrapped_module.",):
+        if key.startswith(prefix):
+            return key[len(prefix):]
+    return key
+
+
+def _remap_merged_state_dict(
+    merged_sd: dict[str, torch.Tensor],
+    model_sd: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    remapped: dict[str, torch.Tensor] = {}
+    unexpected_keys: list[str] = []
+    duplicate_keys: list[str] = []
+    shape_mismatches: list[str] = []
+
+    for original_key, value in merged_sd.items():
+        clean_key = _strip_fsdp_prefix(original_key)
+        if clean_key not in model_sd:
+            unexpected_keys.append(original_key)
+            continue
+        if clean_key in remapped:
+            duplicate_keys.append(clean_key)
+            continue
+        expected = model_sd[clean_key]
+        if tuple(value.shape) != tuple(expected.shape):
+            shape_mismatches.append(f"{original_key}: checkpoint {tuple(value.shape)} != model {tuple(expected.shape)}")
+            continue
+        remapped[clean_key] = value.to(dtype=expected.dtype)
+
+    missing_keys = sorted(set(model_sd.keys()) - set(remapped.keys()))
+    problems: list[str] = []
+    if unexpected_keys:
+        problems.append(f"unexpected checkpoint keys={len(unexpected_keys)} examples={_format_examples(unexpected_keys)}")
+    if duplicate_keys:
+        problems.append(f"duplicate remapped keys={len(duplicate_keys)} examples={_format_examples(duplicate_keys)}")
+    if shape_mismatches:
+        problems.append(f"shape mismatches={len(shape_mismatches)} examples={_format_examples(shape_mismatches)}")
+    if missing_keys:
+        problems.append(f"missing model keys={len(missing_keys)} examples={_format_examples(missing_keys)}")
+    if problems:
+        raise RuntimeError("Merged checkpoint does not exactly match the target model: " + "; ".join(problems))
+
+    return remapped
 
 
 def merge(ckpt_path: str, base_model: str, output_dir: str) -> None:
@@ -127,22 +178,8 @@ def merge(ckpt_path: str, base_model: str, output_dir: str) -> None:
         model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16, trust_remote_code=True)
 
         model_sd = model.state_dict()
-        remapped = {}
-        skipped = []
-        for k_orig, v in merged_sd.items():
-            k_clean = k_orig
-            for prefix in ("_fsdp_wrapped_module.",):
-                if k_clean.startswith(prefix):
-                    k_clean = k_clean[len(prefix):]
-            if k_clean in model_sd:
-                remapped[k_clean] = v.to(dtype=model_sd[k_clean].dtype)
-            else:
-                skipped.append(k_orig)
-
-        if skipped:
-            print(f"  Warning: {len(skipped)}/{len(merged_sd)} keys unmapped (first 5: {skipped[:5]})")
-
-        model.load_state_dict(remapped, strict=False)
+        remapped = _remap_merged_state_dict(merged_sd, model_sd)
+        model.load_state_dict(remapped, strict=True)
 
         # Save
         os.makedirs(output_dir, exist_ok=True)
