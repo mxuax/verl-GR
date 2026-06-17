@@ -238,6 +238,26 @@ def test_main_ppo_no_longer_rewrites_ddp_config_at_runtime():
     assert '"distillation_loss"' in source
 
 
+def test_main_ppo_colocates_reference_policy_for_actor_rollout_ref():
+    source = _read_text("verl_gr/trainers/main_ppo.py")
+    module = ast.parse(source)
+    task_runner_cls = next(
+        node for node in ast.walk(module) if isinstance(node, ast.ClassDef) and node.name == "TaskRunner"
+    )
+    method = _get_method(task_runner_cls, "add_ref_policy_worker")
+    segment = ast.get_source_segment(source, method) or ""
+
+    assert "Role.ActorRolloutRef in self.role_worker_mapping" in segment
+    assert "return super().add_ref_policy_worker(config, ref_policy_cls)" in segment
+
+
+def test_ref_sync_requires_colocated_actor_and_ref():
+    source = _read_text("verl_gr/workers/ref_sync.py")
+    assert 'getattr(self, "actor", None) is None' in source
+    assert 'getattr(self, "ref", None) is None' in source
+    assert "requires a colocated ActorRolloutRef worker" in source
+
+
 def test_run_script_explicitly_pins_ddp_backend_fields():
     source = _read_text("scripts/run_minionerec_grpo.sh")
     assert '++actor_rollout_ref.actor.strategy=ddp' in source

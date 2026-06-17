@@ -57,8 +57,10 @@ class RefSyncMixin:
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def sync_ref_weights(self, mixup_alpha: float = 0.0):
-        if not hasattr(self, "actor") or not hasattr(self, "ref"):
-            return
+        if getattr(self, "actor", None) is None or getattr(self, "ref", None) is None:
+            raise RuntimeError(
+                "sync_ref_weights requires a colocated ActorRolloutRef worker with actor and ref models."
+            )
 
         actor_module = self.actor.engine.module
         ref_module = self.ref.engine.module
