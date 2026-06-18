@@ -198,16 +198,16 @@ class DDPEngine(FSDPEngine):
 
     def _build_ddp_module(self, module: torch.nn.Module) -> torch.nn.Module:
         """Wrap the HF model with DistributedDataParallel."""
-        from verl.utils.activation_offload import enable_activation_offloading
-
         module = module.to(get_device_id())
 
         find_unused = getattr(self.engine_config, "ddp_find_unused_parameters", False)
         module = DDP(module, device_ids=[torch.cuda.current_device()], find_unused_parameters=find_unused)
 
-        # Apply activation offloading (if configured)
         if getattr(self.model_config, "enable_activation_offload", False):
-            enable_activation_offloading(module, "ddp")
+            raise ValueError(
+                "DDP does not support actor_rollout_ref.model.enable_activation_offload; "
+                "set it to false or use an FSDP/FSDP2 strategy."
+            )
 
         return module
 
