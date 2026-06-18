@@ -108,6 +108,7 @@ async def run_async_beam_search(
         return True
 
     for step in range(max_tokens):
+        completed_before_step = len(completed)
         prompt_token_ids_list = [beam.full_prompt_token_ids for beam in active]
         request_suffixes = [f"beam-step-{step}-{beam_idx}-{uuid4().hex}" for beam_idx, _ in enumerate(active)]
         allowed_token_ids_list = None
@@ -172,6 +173,8 @@ async def run_async_beam_search(
                     expanded.append(next_beam)
 
         if not expanded:
+            if len(completed) > completed_before_step:
+                active = []
             break
 
         expanded.sort(
