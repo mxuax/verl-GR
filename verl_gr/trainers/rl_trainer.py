@@ -600,6 +600,15 @@ class RLTrainer(RayPPOTrainerBase):
         )
         gen_batch.non_tensor_batch.update(batch.non_tensor_batch)
         self._ensure_reward_routing_keys(gen_batch)
+        tokenizer = getattr(self, "tokenizer", None)
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = eos_token_id
+        if eos_token_id is not None:
+            gen_batch.meta_info["eos_token_id"] = int(eos_token_id)
+        if pad_token_id is not None:
+            gen_batch.meta_info["pad_token_id"] = int(pad_token_id)
         rollout_cfg = self.config.actor_rollout_ref.rollout
         if rollout_cfg.get("name") == "two_stage":
             rollout_custom = rollout_cfg.get("custom") or {}

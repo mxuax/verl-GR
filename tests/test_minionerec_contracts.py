@@ -61,6 +61,18 @@ def test_rl_trainer_reward_colocate_routes_postprocess_rewards():
     assert postprocess_call, "_compute_reward_colocate should call adapter postprocess_rewards()"
 
 
+def test_rl_trainer_recommendation_gen_batch_sets_tokenizer_special_ids():
+    source = _read_text("verl_gr/trainers/rl_trainer.py")
+    module = ast.parse(source)
+    trainer_cls = _get_class(module, "RLTrainer")
+    method = _get_method(trainer_cls, "_prepare_recommendation_gen_batch")
+    segment = ast.get_source_segment(source, method) or ""
+
+    assert 'getattr(self, "tokenizer", None)' in segment
+    assert 'gen_batch.meta_info["eos_token_id"] = int(eos_token_id)' in segment
+    assert 'gen_batch.meta_info["pad_token_id"] = int(pad_token_id)' in segment
+
+
 def test_minionerec_validation_groups_by_uid_not_prompt_text():
     source = _read_text("verl_gr/recipes/minionerec/minionerec_trainer.py")
     module = ast.parse(source)
@@ -71,6 +83,19 @@ def test_minionerec_validation_groups_by_uid_not_prompt_text():
     assert "sample_uids" in source_segment
     assert "grouped_indices[(str(data_source), str(uid))]" in source_segment
     assert "sample_inputs" not in source_segment
+
+
+def test_minionerec_rewards_decode_only_masked_responses():
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_trainer.py")
+    module = ast.parse(source)
+    adapter_cls = _get_class(module, "MiniOneRecTrainerAdapter")
+    postprocess = _get_method(adapter_cls, "postprocess_rewards")
+    postprocess_segment = ast.get_source_segment(source, postprocess) or ""
+
+    assert "_valid_response_token_ids(batch, trainer.tokenizer.pad_token_id)" in postprocess_segment
+    assert 'for ids in batch.batch["responses"]' not in postprocess_segment
+    assert "def _response_attention_mask" in source
+    assert "attention_mask[:, -responses.shape[-1]:]" in source
 
 
 def test_minionerec_dataset_disables_alignment_for_val_by_default():

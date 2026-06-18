@@ -162,6 +162,26 @@ async def run_async_beam_search(
                     add_fallback_token(beam, allowed_tokens, expanded)
                     continue
 
+            if decode_mode == "stochastic_constrained":
+                if not first_output.token_ids:
+                    if allowed_tokens is not None:
+                        add_fallback_token(beam, allowed_tokens, expanded)
+                    continue
+                token_id = int(first_output.token_ids[0])
+                if allowed_tokens is not None and token_id not in allowed_tokens:
+                    add_fallback_token(beam, allowed_tokens, expanded)
+                    continue
+                token_info = step_logprobs.get(token_id)
+                token_logprob = float(token_info.logprob) if token_info is not None else 0.0
+                next_beam = beam.extend(token_id, token_logprob)
+                if token_id == eos_token_id and not ignore_eos:
+                    next_beam.finish_reason = "stop"
+                    next_beam.stop_reason = eos_token_id
+                    completed.append(next_beam)
+                else:
+                    expanded.append(next_beam)
+                continue
+
             for token_id, token_info in ranked_tokens:
                 next_beam = beam.extend(int(token_id), float(token_info.logprob))
                 if token_id == eos_token_id and not ignore_eos:
