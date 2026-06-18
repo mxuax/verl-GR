@@ -37,6 +37,8 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from verl_gr.recipes.minionerec.minionerec_format import build_sid_prompt
+
 
 # =============================================================================
 # Prefix Trie Constraint (mirrors MiniOneRec LogitProcessor)
@@ -145,7 +147,7 @@ def constrained_beam_generate(
             return scores + mask
 
     processor = ConstrainedLogitsProcessor()
-    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=True).to(device)
+    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(device)
 
     outputs = model.generate(
         **inputs,
@@ -388,7 +390,7 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
     import pandas as pd
     df = pd.read_csv(test_file)
     test_prompt = _build_prompt(_parse_history(df.iloc[0].to_dict().get("history_item_sid", "[]")))
-    inputs = tokenizer(test_prompt, return_tensors="pt", add_special_tokens=True).to(device)
+    inputs = tokenizer(test_prompt, return_tensors="pt", add_special_tokens=False).to(device)
     # Unconstrained greedy
     out = model.generate(**inputs, max_new_tokens=16, do_sample=False, num_beams=1,
                          pad_token_id=pad)
@@ -461,7 +463,8 @@ def evaluate_ckpt(ckpt_path: str, test_file: str, info_file: str, num_beams: int
     # Final report
     elapsed = time.time() - start
     print(f"\n--- Results for {Path(ckpt_path).name} ---")
-    print(f"Samples: {len(all_metrics['HR@3'])} | Time: {elapsed:.1f}s")
+    samples_with_metrics = len(all_metrics.get("HR@3", []))
+    print(f"Samples: {samples_with_metrics} | Time: {elapsed:.1f}s")
 
     # EOS-only statistics
     eos_stats = _compute_eos_stats(all_completions_raw, all_completions_decoded, eos, pad)
@@ -497,13 +500,8 @@ def _parse_history(value):
 
 
 def _build_prompt(history):
-    hstr = ", ".join(str(x) for x in history)
-    return (
-        "### User Input:\n"
-        f"The user has interacted with items {hstr} in chronological order. "
-        "Can you predict the next possible item that the user may expect?\n\n"
-        "### Response:\n"
-    )
+    prompt, _ = build_sid_prompt(history)
+    return prompt
 
 
 def main():

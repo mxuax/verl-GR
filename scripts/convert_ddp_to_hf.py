@@ -19,6 +19,8 @@ Usage:
         --batch
 
 The output goes to ``<ckpt>/huggingface/`` by default.
+When ``--batch --output`` is used, each step is written to
+``<output>/global_step_N/`` to avoid overwriting previous conversions.
 """
 
 from __future__ import annotations
@@ -28,6 +30,32 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+
+_HF_WEIGHT_PATTERNS = (
+    "pytorch_model*.bin",
+    "model*.safetensors",
+    "*.safetensors",
+    "*.safetensors.index.json",
+    "pytorch_model*.bin.index.json",
+)
+
+
+def _remove_stale_weight_files(hf_dir: str) -> None:
+    """Remove old HF weight files so loaders cannot prefer stale shards."""
+    output_path = Path(hf_dir)
+    for pattern in _HF_WEIGHT_PATTERNS:
+        for path in output_path.glob(pattern):
+            if path.is_file():
+                path.unlink()
+
+
+def _torch_load_checkpoint(torch_module, checkpoint_path: str):
+    """Load checkpoints across PyTorch versions while opting out of 2.6 weights_only."""
+    try:
+        return torch_module.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch_module.load(checkpoint_path, map_location="cpu")
 
 
 def convert_one(ckpt_dir: str, base_model: str, output_dir: str | None = None) -> str:
@@ -53,7 +81,7 @@ def convert_one(ckpt_dir: str, base_model: str, output_dir: str | None = None) -
     os.makedirs(hf_dir, exist_ok=True)
 
     print(f"[convert] Loading state_dict from {model_pt}")
-    state_dict = torch.load(model_pt, map_location="cpu")
+    state_dict = _torch_load_checkpoint(torch, model_pt)
     # Handle wrapped state_dict (some checkpoints may have an extra 'module.' prefix
     # from DDP unwrapping, though our DDP engine strips it during save).
     if any(k.startswith("module.") for k in state_dict):
@@ -65,7 +93,9 @@ def convert_one(ckpt_dir: str, base_model: str, output_dir: str | None = None) -
     config.save_pretrained(hf_dir)
     print(f"[convert] Saved config.json to {hf_dir}")
 
-    # Save weights as pytorch_model.bin (HF-compatible)
+    # Save weights as pytorch_model.bin (HF-compatible).  Clean first because
+    # from_pretrained prefers safetensors over .bin when both exist.
+    _remove_stale_weight_files(hf_dir)
     weight_file = os.path.join(hf_dir, "pytorch_model.bin")
     torch.save(state_dict, weight_file)
     print(f"[convert] Saved weights ({len(state_dict)} keys) to {weight_file}")
@@ -106,11 +136,18 @@ def main():
             print(f"No global_step_*/actor directories found under {args.ckpt}")
             sys.exit(1)
         print(f"Found {len(actor_dirs)} actor checkpoint(s)")
+        failures: list[tuple[Path, Exception]] = []
         for d in actor_dirs:
             try:
-                convert_one(str(d), args.base_model, args.output)
+                output_dir = None
+                if args.output:
+                    output_dir = str(Path(args.output).resolve() / d.parent.name)
+                convert_one(str(d), args.base_model, output_dir)
             except Exception as e:
                 print(f"[error] {d}: {e}")
+                failures.append((d, e))
+        if failures:
+            sys.exit(1)
     else:
         convert_one(args.ckpt, args.base_model, args.output)
 

@@ -127,6 +127,12 @@ def test_worker_has_hf_beam_generate_method():
     assert '"prompt_indices"' in segment
 
 
+def test_fsdp_hf_generation_summons_nested_full_params():
+    source = _read_text("verl_gr/recipes/minionerec/minionerec_fsdp_workers.py")
+    assert "FSDP.summon_full_params(actor_module, writeback=False)" in source
+    assert "recurse=False" not in source
+
+
 def test_hf_constrained_generator_exports_train_eval():
     source = _read_text("verl_gr/recipes/minionerec/hf_constrained_generation.py")
     assert "class HfConstrainedBeamGenerator" in source
@@ -317,3 +323,19 @@ def test_minionerec_worker_does_not_require_direct_actor_strategy_attr():
 def test_openonerec_yaml_has_stage2_decode_mode():
     source = _read_text("configs/verl_gr/openonerec/grpo_trainer.yaml")
     assert "stage2_decode_mode: vllm_native_beam" in source
+
+
+def test_ddp_to_hf_conversion_avoids_stale_and_overwritten_outputs():
+    source = _read_text("scripts/convert_ddp_to_hf.py")
+    assert "_remove_stale_weight_files(hf_dir)" in source
+    assert 'weights_only=False' in source
+    assert 'Path(args.output).resolve() / d.parent.name' in source
+    assert 'convert_one(str(d), args.base_model, args.output)' not in source
+
+
+def test_eval_compare_uses_training_prompt_and_tokenization_contract():
+    source = _read_text("scripts/eval_compare_ckpts.py")
+    assert "from verl_gr.recipes.minionerec.minionerec_format import build_sid_prompt" in source
+    assert "prompt, _ = build_sid_prompt(history)" in source
+    assert "add_special_tokens=True" not in source
+    assert "add_special_tokens=False" in source
