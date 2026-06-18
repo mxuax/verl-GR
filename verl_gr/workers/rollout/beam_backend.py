@@ -184,15 +184,14 @@ async def run_async_beam_search(
         )
         active = expanded[:beam_width]
 
-    # Only add active (pre-EOS) beams as a fallback when no beam reached EOS.
-    # When all beams completed via EOS (the typical constrained path),
-    # their stop-variants are already in ``completed`` and the active list
-    # would only introduce duplicates that compress the effective beam width.
-    if not completed:
-        for beam in active:
-            if beam.finish_reason is None:
-                beam.finish_reason = "length"
-            completed.append(beam)
+    # Fill with active (pre-EOS) beams only when EOS completions did not cover
+    # the requested width.  Dropping them collapses the effective beam width,
+    # while adding them after the width is already full only creates duplicates.
+    remaining_slots = max(0, beam_width - len(completed))
+    for beam in active[:remaining_slots]:
+        if beam.finish_reason is None:
+            beam.finish_reason = "length"
+        completed.append(beam)
 
     if not completed and allowed_tokens_fn is not None:
         add_fallback_token(active[0], set(allowed_tokens_fn(active[0].prompt_token_ids, active[0].generated_token_ids)), completed)

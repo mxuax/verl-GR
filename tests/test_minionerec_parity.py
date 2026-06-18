@@ -195,3 +195,55 @@ def test_stochastic_constrained_mode_uses_sampled_token_not_top_logprob():
 
     assert len(beams) == 2
     assert all(beam.generated_token_ids == [8] for beam in beams)
+
+
+def test_beam_search_keeps_active_beams_when_some_complete_early():
+    async def generate_next_tokens(prompt_ids_list, _request_suffixes, _allowed_token_ids_list):
+        results = []
+        for prompt_ids in prompt_ids_list:
+            if prompt_ids[-1] == 7:
+                results.append(
+                    SimpleNamespace(
+                        outputs=[
+                            SimpleNamespace(
+                                finish_reason=None,
+                                logprobs=[{8: SimpleNamespace(logprob=-0.3)}],
+                                token_ids=[8],
+                            )
+                        ]
+                    )
+                )
+            else:
+                results.append(
+                    SimpleNamespace(
+                        outputs=[
+                            SimpleNamespace(
+                                finish_reason=None,
+                                logprobs=[
+                                    {
+                                        9: SimpleNamespace(logprob=-0.1),
+                                        7: SimpleNamespace(logprob=-0.2),
+                                    }
+                                ],
+                                token_ids=[9],
+                            )
+                        ]
+                    )
+                )
+        return results
+
+    beams = asyncio.run(
+        run_async_beam_search(
+            prompt_token_ids=[1, 2],
+            beam_width=2,
+            max_tokens=2,
+            eos_token_id=9,
+            ignore_eos=False,
+            length_penalty=0.0,
+            generate_next_tokens=generate_next_tokens,
+        )
+    )
+
+    assert len(beams) == 2
+    assert [beam.generated_token_ids for beam in beams] == [[9], [7, 8]]
+    assert [beam.finish_reason for beam in beams] == ["stop", "length"]
