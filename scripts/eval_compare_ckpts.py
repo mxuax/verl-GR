@@ -506,6 +506,13 @@ def _build_prompt(history):
     )
 
 
+def _mean_metric_values(results: dict, key: str) -> float:
+    values = results.get(key, [])
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified MiniOneRec checkpoint evaluation")
     parser.add_argument("--ckpt", required=True, help="Primary checkpoint path")
@@ -531,10 +538,8 @@ def main():
         print("-" * 56)
         for k in ("HR@3", "NDCG@3", "HR@5", "NDCG@5", "HR@10", "NDCG@10",
                   "eos_only_ratio", "empty_decoded_ratio", "mean_resp_len"):
-            v1 = results1.get(k, [0])[0] if k in results1 else sum(results1.get(k, [0])) / max(1, len(results1.get(k, [])))
-            v2 = results2.get(k, [0])[0] if k in results2 else sum(results2.get(k, [0])) / max(1, len(results2.get(k, [])))
-            if isinstance(v1, list): v1 = sum(v1) / max(1, len(v1))
-            if isinstance(v2, list): v2 = sum(v2) / max(1, len(v2))
+            v1 = _mean_metric_values(results1, k)
+            v2 = _mean_metric_values(results2, k)
             delta = v1 - v2
             print(f"{k:20s} | {v1:10.4f} | {v2:10.4f} | {delta:+10.4f}")
 
