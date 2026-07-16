@@ -4,82 +4,87 @@
 
 ### Task
 
-MiniOneRec is a sequential recommendation task over catalog SIDs. Given a
-user's historical item sequence, the model generates one catalog-valid SID in
-the form:
-
-```text
-<s_a_*><s_b_*><s_c_*>
-```
-
-During RL training, MiniOneRec uses constrained HF beam search (`beam=16`) to
-produce candidates that are valid under the item trie. Same-evaluator
-validation uses the original MiniOneRec `evaluate.py` contract with `beam=50`.
+Sequential next-item recommendation: given a user's historical item sequence,
+the model emits one catalog-valid SID in the form
+`<s_a_*><s_b_*><s_c_*>`. Training rollout uses constrained HF beam search
+(`beam=16`) over the MiniOneRec item trie; same-evaluator validation follows the
+original MiniOneRec `evaluate.py` + `calc.py` contract with `beam=50`.
 
 ### Sample Input/Output
 
 **Input (prompt, abbreviated):**
 
 ```text
-You are a recommendation assistant.
 User history:
-  <s_a_...><s_b_...><s_c_...>
-  <s_a_...><s_b_...><s_c_...>
-  ...
-Please predict the next item SID.
+  <s_a_1203><s_b_881><s_c_4502>
+  <s_a_0187><s_b_991><s_c_7310>
+  ...  (historical item SIDs)  ...
+Please predict the next item.
 ```
 
-**Output:**
+**Ground Truth:**
+```text
+<s_a_2214><s_b_1006><s_c_3377>
+```
+
+**Beam outputs (abbreviated):**
+```text
+<s_a_0421><s_b_3372><s_c_0934>
+<s_a_2214><s_b_1006><s_c_3377>
+<s_a_5199><s_b_0028><s_c_4401>
+...
+```
+
+Scores are 1 only when a predicted SID matches the target item under the
+MiniOneRec catalog contract. HR@20 / NDCG@20 are computed by the original
+MiniOneRec evaluator rather than inferred from generic trainer reward scalars.
+
+## Learning Paradigm
+
+This implementation is aligned to the original MiniOneRec GRPO recipe instead
+of introducing a new reward, penalty, or frozen-reference variant.
+
+The policy-gradient term follows the original score-function estimator:
 
 ```text
-<s_a_123><s_b_456><s_c_789>
+exp(logp - logp.detach()) * advantage
 ```
 
-The reward is based on whether the generated SID matches the target item under
-the MiniOneRec catalog contract.
+The KL term uses the original unclamped low-variance KL path:
 
----
+```text
+exp(ref_logp - logp) - (ref_logp - logp) - 1
+```
 
-## Alignment Status
-
-The current `verl-GR` MiniOneRec path is designed to match the original
-MiniOneRec GRPO training recipe rather than introducing a new objective. The
-implemented alignment covers the mechanism and update-precision contracts that
-matter for convergence:
-
-- **Rollout / logprob contract**: rollout transition logprobs are preserved and
-  used where required; MiniOneRec completion logprob follows the original
-  `logits_to_keep` contract.
-- **Policy loss**: `minionerec_reinforce` matches the original score-function
-  estimator:
-
-  ```text
-  exp(logp - logp.detach()) * advantage
-  ```
-
-- **KL loss**: `minionerec_low_var_kl` implements the original unclamped
-  low-variance KL path:
-
-  ```text
-  exp(ref_logp - logp) - (ref_logp - logp) - 1
-  ```
-
-- **Reference sync**: the reference policy uses EMA sync with
-  `sync_freq=512` and `ref_model_mixup_alpha=0.6`, matching the target
-  MiniOneRec training contract.
-- **Optimizer precision**: the DDP recipe uses `paged_adamw_32bit` instead of
-  silently falling back to torch AdamW. Same-batch replay probes show aligned
-  loss and visible parameter deltas against the original DeepSpeed ZeRO-2 path.
-- **Data order**: shuffled prompt order and seed handling are aligned with the
-  original `Dataset.shuffle(seed=42)` + repeated-generation contract.
-
-In short, the current branch has the MiniOneRec mechanism and update-precision
-alignment in place. Remaining work is primarily performance engineering and
-continued end-to-end throughput optimization.
-
----
+The reference model is synchronized by EMA with `sync_freq=512` and
+`ref_model_mixup_alpha=0.6`. Actor/ref forward stays in bf16, while the DDP
+optimizer path uses `paged_adamw_32bit` for the intended fp32 master-state
+update behavior.
 
 ## Training Convergence
+
+The current branch has implemented the mechanism and update-precision alignment
+needed by MiniOneRec GRPO:
+
+- rollout transition logprobs are carried through the constrained beam path;
+- completion-only actor/ref logprob follows the original `logits_to_keep`
+  contract;
+- the DDP config composes at Hydra root (`# @package _global_`) so the optimizer
+  is not silently replaced by torch AdamW stubs;
+- same-batch DDP-vs-DeepSpeed replay probes match loss and visible parameter
+  deltas under production-like micro-batching / accumulation settings;
+- same-evaluator validation uses the original MiniOneRec beam-50 metric path.
+
+| Setting | Value |
+| --- | --- |
+| Backend | DDP |
+| Train beam | 16 |
+| Validation beam | 50 |
+| Optimizer | `paged_adamw_32bit` |
+| LR | `1e-5` |
+| KL | `minionerec_low_var_kl`, coef `0.001` |
+| Ref sync | every 512 steps, mixup alpha `0.6` |
+| Forward dtype | bf16 |
 
 Recommended launcher:
 
@@ -90,61 +95,29 @@ export PYTHON_BIN=/path/to/vllm-gr/bin/python
 bash scripts/run_minionerec_grpo_rl_aligned.sh
 ```
 
-Important defaults:
-
-| Setting | Value |
-| --- | --- |
-| Backend | DDP |
-| Train beam | 16 |
-| Validation beam | 50 |
-| Optimizer | `paged_adamw_32bit` |
-| LR | `1e-5` |
-| KL | `minionerec_low_var_kl`, coef `0.001` |
-| Ref sync | every 512 steps, alpha `0.6` |
-| Forward dtype | bf16 |
-
 Same-evaluator validation should be run with:
 
 ```bash
 BASE_MODEL=/path/to/checkpoint/actor/huggingface \
 RESULT_NAME=minionerec_valid_stepXXXX \
-bash scripts/convergence/eval_minionerec_valid_beam50.sh
+bash /path/to/local/eval_minionerec_valid_beam50.sh
 ```
 
-This uses the original MiniOneRec `evaluate.py` + `calc.py` pipeline on the
-valid split with `beam=50`.
-
----
+Local convergence/debug helper scripts are intentionally kept outside the
+tracked repository; the committed recipe keeps only the runtime path needed for
+the aligned MiniOneRec implementation.
 
 ## Performance
 
-MiniOneRec in `verl-GR` prioritizes faithful mechanism alignment first:
+The current MiniOneRec path prioritizes faithful alignment first. It already
+avoids several unnecessary costs for this recipe:
 
-- constrained HF beam search avoids invalid catalog SIDs;
-- DDP actor/ref workers avoid unnecessary vLLM initialization for this recipe;
-- completion-only logprob reduces wasted LM-head work;
-- padded and remove-padding paths are both supported for parity experiments.
+- constrained HF beam search prevents invalid catalog SIDs;
+- DDP actor/ref workers avoid vLLM initialization for MiniOneRec training;
+- completion-only logprob avoids computing unused prompt-token LM-head outputs;
+- padded and remove-padding logprob paths are available for parity checks.
 
-There is still room for further performance optimization. The main areas are:
-
-- faster constrained decoding for large batches;
-- lower-overhead actor/ref logprob scheduling;
-- improved overlap between rollout, reward computation, and actor update;
-- reducing validation/checkpoint overhead during long runs.
-
-These are engineering optimizations on top of the aligned training contract.
-
----
-
-## Key Files
-
-- `verl_gr/recipes/minionerec/minionerec_recipe.py`: task runtime and dataset
-  wiring.
-- `verl_gr/recipes/minionerec/minionerec_loss.py`: MiniOneRec policy loss
-  registration.
-- `verl_gr/recipes/minionerec/constrained_beam_agent_loop.py`: constrained HF
-  beam rollout path.
-- `verl_gr/workers/engine/completion_only_logprob.py`: completion-token logprob
-  path with original-style `logits_to_keep` support.
-- `configs/verl_gr/minionerec/grpo_trainer_ddp.yaml`: DDP GRPO recipe config.
-- `scripts/run_minionerec_grpo_rl_aligned.sh`: primary aligned launcher.
+There is still optimization room in constrained decoding throughput, actor/ref
+logprob scheduling overhead, rollout/update overlap, and validation/checkpoint
+cost. These are performance-engineering items on top of the aligned training
+contract, not changes to the MiniOneRec objective.

@@ -71,6 +71,9 @@ htmlcov/
 .tox/
 .nox/
 
+# Local convergence/debug experiments
+scripts/convergence/
+
 # ML/DL
 wandb/
 mlruns/
