@@ -59,7 +59,7 @@ class TwoStagevLLMHttpServer(vLLMHttpServer):
     _MAX_TWO_STAGE_CACHE_SIZE = 1024
 
     def __init__(self, *args, **kwargs):
-        os.environ["VERL_ROLLOUT_ZMQ_NAMESPACE"] = "two-stage"
+        os.environ.setdefault("VERL_ROLLOUT_ZMQ_NAMESPACE", "two-stage")
         os.environ.setdefault("VERL_ZMQ_SOCKET_PREFIX", "verl-gr-two-stage")
         super().__init__(*args, **kwargs)
         self._two_stage_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()

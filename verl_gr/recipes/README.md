@@ -4,9 +4,9 @@ Generative recommendation systems (GenRecSys) use LLMs to produce recommendation
 Technically, their approaches are two-fold: output tokens can be treated either as semantic IDs (SIDs) embedded for products, goods, or items, or as natural-language representations of ranked items.
 
  `verl-gr` currently supports three recipes for GRPO training:
-* OpenOneRec
-* MiniOneRec
-* Rank-GRPO
+* [OpenOneRec](openonerec/README.md)
+* [MiniOneRec](minionerec/README.md)
+* [Rank-GRPO](rankgrpo/README.md)
 
 We picked these three works for the initial release as they cover the two major routes of GenRecSys, and their intersection.
 

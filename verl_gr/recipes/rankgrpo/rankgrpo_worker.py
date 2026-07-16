@@ -9,6 +9,7 @@ from verl.workers.engine_workers import ActorRolloutRefWorker
 
 from verl_gr.recipes.rankgrpo.rankgrpo_loss import rankgrpo_ppo_loss
 from verl_gr.workers.grad_hooks import install_grad_hooks
+from verl_gr.workers.rollout.registration import register_rankgrpo_rollout_class
 
 
 class RankGRPOActorRolloutRefWorker(ActorRolloutRefWorker):
@@ -16,6 +17,8 @@ class RankGRPOActorRolloutRefWorker(ActorRolloutRefWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
+        if self.config.rollout.name == "rankgrpo" and self.config.rollout.mode == "async":
+            register_rankgrpo_rollout_class()
         super().init_model()
 
         # Install per-layer gradient hooks on the FSDP engine

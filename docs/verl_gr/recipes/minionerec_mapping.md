@@ -125,7 +125,7 @@ Validation should follow `MiniOneRec/evaluate.py`:
 | Optimizer | `paged_adamw_32bit` (`verl_gr/workers/optimizer.py`) for actor. |
 | Skip old logprob forward | `minionerec_reinforce` + `RLTrainer._compute_old_log_prob` bypass. |
 | Memory | `use_remove_padding`, `entropy_from_logits_with_chunking`, `entropy_checkpointing`. |
-| Profiling | Shared NVTX names; `scripts/compare_nsys_nvtx.py` for A/B vs MiniOneRec traces. |
+| Profiling | Shared NVTX names; `scripts/misc/profiling/compare_nsys_nvtx.py` for A/B vs MiniOneRec traces. |
 
 ## Reward shaping (training)
 

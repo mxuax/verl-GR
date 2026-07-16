@@ -5,7 +5,7 @@
 # Sets val_before_train=true so the trainer validates then exits.
 #
 # Usage:
-#   bash scripts/eval_sft_minionerec.sh <sft_ckpt_path> [category]
+#   bash scripts/misc/sft_eval/eval_sft_minionerec.sh <sft_ckpt_path> [category]
 
 set -euo pipefail
 
@@ -13,7 +13,9 @@ SFT_CKPT="${1:?Usage: $0 <sft_ckpt_path> [category]}"
 CATEGORY="${2:-Industrial_and_Scientific}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VERL_GR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${VERL_GR_ROOT}"
+PROJECT_ROOT="${VERL_GR_ROOT}"
 DATA_ROOT="${PROJECT_ROOT}/../MiniOneRec/data/Amazon"
 
 TRAIN_FILE="${DATA_ROOT}/train/${CATEGORY}_5_*.csv"

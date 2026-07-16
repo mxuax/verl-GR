@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Smoke-test main-branch training launchers on 4 GPUs (minimal steps/samples).
 # Usage (from login node with an active 4-GPU allocation):
-#   srun --overlap --jobid=<JOBID> bash scripts/smoke_test_main_4gpu.sh
+#   srun --overlap --jobid=<JOBID> bash scripts/misc/smoke/smoke_test_main_4gpu.sh
 # Or directly on a GPU node:
-#   bash scripts/smoke_test_main_4gpu.sh
+#   bash scripts/misc/smoke/smoke_test_main_4gpu.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
-VERL_GR_ROOT="$(dirname "${SCRIPT_DIR}")"
+VERL_GR_ROOT="$(dirname "$(dirname "${SCRIPT_DIR}")")"
 cd "${VERL_GR_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/fq9hpsac/fq9hpsacuser04/miniforge3/envs/vllm-gr/bin/python}"

@@ -6,8 +6,10 @@ import math
 import os
 import shutil
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 import torch
+import time
 
 from verl import DataProto
 from verl.trainer.ppo import core_algos
@@ -18,7 +20,26 @@ from verl.utils.torch_functional import masked_mean
 from verl.workers.utils.padding import left_right_2_no_padding
 
 from verl_gr.recipes.task_factory import load_object
-from verl_gr.recipes.rankgrpo.rankgrpo_algorithm import compute_rank_grpo_advantage, rankgrpo_enabled
+from verl_gr.recipes.openonerec.onerec_profile_metrics import compute_openonerec_data_metrics
+from verl_gr.recipes.openonerec.onerec_trainer import (
+    openonerec_evaluate_and_prune_checkpoint,
+    openonerec_dump_generations,
+    openonerec_maybe_log_val_generations,
+    openonerec_validate,
+)
+from verl_gr.recipes.rankgrpo.rankgrpo_algorithm import (
+    compute_rank_grpo_advantage,
+    compute_rank_grpo_training_reward_metrics,
+    rankgrpo_enabled,
+)
+from verl_gr.recipes.rankgrpo.rankgrpo_logprob_metrics import (
+    alignment_report_enabled,
+    calculate_rankgrpo_logprob_gate_metrics,
+    maybe_export_rankgrpo_logprobs,
+    merge_sidecar_probe_timings,
+    record_rankgrpo_alignment_metrics,
+    write_rankgrpo_alignment_report,
+)
 from verl_gr.recipes.rankgrpo.rankgrpo_trainer import RankGRPOTrainerAdapter
 from verl_gr.trainers.task_adapter import TrainerTaskAdapter
 from verl_gr.workers.rollout.beam_config import (
@@ -44,6 +65,28 @@ def _nvtx_range(name: str):
     finally:
         if enabled:
             torch.cuda.nvtx.range_pop()
+
+
+class _OpenOneRecTrainerAdapter(TrainerTaskAdapter):
+    def prepare_gen_batch(self, trainer, batch: DataProto) -> DataProto:
+        return trainer._prepare_recommendation_gen_batch(batch)
+
+    def validate(self, trainer):
+        return openonerec_validate(trainer)
+
+    def dump_generations(self, trainer, inputs, outputs, scores, reward_extra_infos_dict, dump_path, ground_truths=None):
+        return openonerec_dump_generations(
+            trainer,
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=dump_path,
+            ground_truths=ground_truths,
+        )
+
+    def maybe_log_val_generations(self, trainer, inputs, outputs, scores):
+        return openonerec_maybe_log_val_generations(trainer, inputs=inputs, outputs=outputs, scores=scores)
 
 
 def apply_kl_penalty(data: DataProto, kl_ctrl, kl_penalty: str = "kl"):
@@ -141,6 +184,29 @@ def compute_advantage(
     return data
 
 
+def _openonerec_enabled(config) -> bool:
+    task_name = str(_cfg_get(_cfg_get(config, "task", None), "name", "")).lower()
+    return task_name == "openonerec"
+
+
+def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str, Any]:
+    from verl.trainer.ppo.metric_utils import compute_data_metrics as _base_compute_data_metrics
+
+    metrics = _base_compute_data_metrics(batch=batch, use_critic=use_critic)
+    metrics.update(compute_rank_grpo_training_reward_metrics(batch))
+    probe_t0 = time.perf_counter()
+    metrics.update(calculate_rankgrpo_logprob_gate_metrics(batch))
+    if alignment_report_enabled():
+        metrics["timing_rankgrpo/probe_logprob_gate"] = time.perf_counter() - probe_t0
+    step = batch.meta_info.get("global_steps") if isinstance(getattr(batch, "meta_info", None), dict) else None
+    if step is not None:
+        try:
+            maybe_export_rankgrpo_logprobs(batch, step=int(step))
+        except (TypeError, ValueError):
+            pass
+    return metrics
+
+
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
@@ -200,46 +266,135 @@ class RLTrainer(RayPPOTrainerBase):
             import verl.trainer.ppo.ray_trainer as ray_trainer_mod
 
             ray_trainer_mod.compute_advantage = compute_advantage
+            ray_trainer_mod.compute_data_metrics = compute_data_metrics
+        elif _openonerec_enabled(self.config):
+            import verl.trainer.ppo.ray_trainer as ray_trainer_mod
+
+            ray_trainer_mod.compute_data_metrics = compute_openonerec_data_metrics
 
     def init_workers(self):
         super().init_workers()
-        # MiniOneRec uses a rule-based reward function but has no RM.
-        # self.use_rm is False by default, preventing _compute_reward_colocate
-        # from running.  We force it to True AFTER init so that RM workers
-        # are NOT created but postprocess_rewards still sets rm_scores.
-        self.use_rm = True
+        # MiniOneRec uses a rule-based reward function without an RM.
+        # self.use_rm must be True so that _compute_reward_colocate runs
+        # and the task adapter can postprocess rewards to set rm_scores.
+        # For other tasks (RankGRPO, etc.) the default use_rm=False avoids
+        # the unnecessary per-step Ray remote call overhead.
+        if self._get_task_adapter_is_minionerec():
+            self.use_rm = True
+
+    def _rankgrpo_gates_enabled(self) -> bool:
+        task_name = str(_cfg_get(_cfg_get(self.config, "task", None), "name", "")).lower()
+        return task_name == "rankgrpo"
+
+    def _maybe_rankgrpo_convergence_gate(self, step: int, metrics: Any) -> None:
+        if not self._rankgrpo_gates_enabled() or not isinstance(metrics, dict):
+            return
+        try:
+            from verl_gr.recipes.rankgrpo.alignment.convergence_gate import (
+                maybe_abort_on_kl_growth_failure,
+                maybe_abort_on_length_blowout,
+            )
+
+            maybe_abort_on_kl_growth_failure(int(step), metrics)
+            maybe_abort_on_length_blowout(int(step), metrics)
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+
+    def _write_rankgrpo_convergence_gate_report(self) -> None:
+        if not self._rankgrpo_gates_enabled():
+            return
+        try:
+            from verl_gr.recipes.rankgrpo.alignment.convergence_gate import (
+                write_convergence_gate_report,
+            )
+
+            trainer_cfg = self.config.trainer
+            experiment_name = str(_cfg_get(trainer_cfg, "experiment_name", ""))
+            default_local_dir = _cfg_get(trainer_cfg, "default_local_dir", None)
+            output_dir = Path(default_local_dir).parent if default_local_dir else Path(
+                os.environ.get("OUTPUT_DIR", ".")
+            )
+            write_convergence_gate_report(
+                output_dir=output_dir,
+                experiment_name=experiment_name,
+            )
+        except Exception:
+            pass
+
+    def _get_task_adapter_is_minionerec(self) -> bool:
+        rollout = str(self.config.actor_rollout_ref.rollout.get("name", ""))
+        if rollout == "constrained_beam":
+            return True
+        task_cfg = self.config.get("task", {})
+        if task_cfg and str(task_cfg.get("name", "")).lower() == "minionerec":
+            return True
+        return False
 
     def fit(self):
         logging_steps = self._as_int(_cfg_get(self.config.trainer, "logging_steps", 1), default=1)
-        if logging_steps <= 1:
-            return super().fit()
+        rankgrpo_report = rankgrpo_enabled(self.config.algorithm) and alignment_report_enabled()
 
         from verl.utils.tracking import Tracking
 
         original_log = Tracking.log
 
-        def log_every_n_steps(tracking_self, data, step, backend=None):
-            if step == 0 or step % logging_steps == 0:
-                return original_log(tracking_self, data=data, step=step, backend=backend)
-            return None
+        def _wrapped_log(tracking_self, data, step, backend=None):
+            step_i = int(step)
+            should_log = logging_steps <= 1 or step_i == 0 or step_i % logging_steps == 0
+            if rankgrpo_report and isinstance(data, dict):
+                accum_t0 = time.perf_counter()
+                record_rankgrpo_alignment_metrics(step_i, data)
+                merge_sidecar_probe_timings(
+                    step_i,
+                    {"timing_rankgrpo/probe_align_accum": time.perf_counter() - accum_t0},
+                )
+            if not should_log:
+                return None
+            self._maybe_rankgrpo_convergence_gate(step_i, data)
+            tb_t0 = time.perf_counter()
+            result = original_log(tracking_self, data=data, step=step, backend=backend)
+            if rankgrpo_report:
+                merge_sidecar_probe_timings(
+                    step_i,
+                    {"timing_rankgrpo/probe_tb_log": time.perf_counter() - tb_t0},
+                )
+            return result
 
-        Tracking.log = log_every_n_steps
+        Tracking.log = _wrapped_log
         try:
-            return super().fit()
+            super().fit()
         finally:
             Tracking.log = original_log
+            self._write_rankgrpo_convergence_gate_report()
+            if rankgrpo_report:
+                report_root = os.environ.get("VERL_GR_ALIGN_REPORT_DIR")
+                if not report_root:
+                    output_dir = _cfg_get(self.config.trainer, "default_local_dir", None)
+                    if output_dir:
+                        report_root = str(Path(output_dir).parent)
+                    else:
+                        report_root = os.environ.get("OUTPUT_DIR")
+                result = write_rankgrpo_alignment_report(
+                    output_dir=report_root,
+                    experiment_name=str(_cfg_get(self.config.trainer, "experiment_name", "")),
+                )
+                if result is not None and os.environ.get("VERL_GR_ALIGN_GATE_EXIT", "1").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }:
+                    _, gate = result
+                    if not gate.passed:
+                        raise SystemExit(2)
 
     def _get_task_adapter(self) -> TrainerTaskAdapter:
         if hasattr(self, "_task_adapter"):
             return self._task_adapter
 
-        task_cfg = _cfg_get(self.config, "task", None)
-        adapter_path = _cfg_get(task_cfg, "trainer_adapter_class", None)
-        if adapter_path:
-            self._task_adapter = load_object(str(adapter_path))()
-            return self._task_adapter
-
-        task_name = str(_cfg_get(task_cfg, "name", "")).lower()
+        task_name = str(_cfg_get(_cfg_get(self.config, "task", None), "name", "")).lower()
         rollout_name = str(self.config.actor_rollout_ref.rollout.get("name", ""))
         if task_name == "rankgrpo":
             self._task_adapter = RankGRPOTrainerAdapter()
@@ -247,8 +402,7 @@ class RLTrainer(RayPPOTrainerBase):
             adapter_cls = load_object("verl_gr.recipes.minionerec.minionerec_trainer.MiniOneRecTrainerAdapter")
             self._task_adapter = adapter_cls()
         elif task_name == "openonerec":
-            adapter_cls = load_object("verl_gr.recipes.openonerec.onerec_trainer.OpenOneRecTrainerAdapter")
-            self._task_adapter = adapter_cls()
+            self._task_adapter = _OpenOneRecTrainerAdapter()
         else:
             self._task_adapter = TrainerTaskAdapter()
         return self._task_adapter

@@ -1,6 +1,6 @@
 # @package _global_
-# Minimal Rank-GRPO config for verl release/v0.7.1.
-# Composes from upstream PPO trainer config and keeps rollout on vanilla vLLM.
+# Rank-GRPO config — composes from upstream PPO trainer config.
+# Compute defaults match workingbranch reference; run_rankgrpo.sh overrides paths/runtime.
 
 hydra:
   searchpath:
@@ -14,20 +14,22 @@ model_engine: dp
 
 task:
   name: rankgrpo
-  trainer_adapter_class: verl_gr.recipes.rankgrpo.rankgrpo_trainer.RankGRPOTrainerAdapter
 
 data:
   train_batch_size: 6
+  gen_batch_size: 6
   max_prompt_length: 2048
   prompt_key: prompt
   shuffle: false
   val_batch_size: 32
   train_max_samples: -1
   val_max_samples: 1600
-  max_response_length: 1024
+  max_response_length: 512
   filter_overlong_prompts: true
   filter_overlong_prompts_workers: 16
   truncation: error
+  seed: 3407
+  validation_shuffle: false
   custom_cls:
     name: RankGRPODataset
   reward_fn_key: source
@@ -49,7 +51,11 @@ actor_rollout_ref:
   hybrid_engine: true
 
   ref:
+    strategy: fsdp
     entropy_from_logits_with_chunking: true
+    log_prob_use_dynamic_bsz: false
+    log_prob_micro_batch_size_per_gpu: 32
+    log_prob_max_token_len_per_gpu: 40960
     fsdp_config:
       wrap_policy:
         transformer_layer_cls_to_wrap:
@@ -61,45 +67,71 @@ actor_rollout_ref:
       ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
 
   actor:
+    strategy: fsdp
+    entropy_coeff: 0.0
     entropy_checkpointing: true
+    clip_ratio: 0.06
+    clip_ratio_low: 0.06
     clip_ratio_high: 0.08
-    use_dynamic_bsz: true
-    ppo_mini_batch_size: 6
+    clip_ratio_c: 1e6
+    use_dynamic_bsz: false
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 32
     ppo_max_token_len_per_gpu: 40960
+    ppo_epochs: 1
     use_kl_loss: true
-    kl_loss_coef: 0.001
+    kl_loss_coef: 0.003
     kl_loss_type: low_var_kl
+    loss_agg_mode: seq-mean-token-mean
     optim:
       lr: 1e-6
       lr_warmup_steps: 0
+      lr_scheduler_type: constant
       weight_decay: 0.0
     fsdp_config:
       wrap_policy:
         transformer_layer_cls_to_wrap:
           - Qwen2DecoderLayer
-      model_dtype: bfloat16
+      model_dtype: fp32
     profiler:
       enable: false
       all_ranks: false
       ranks: [0]
 
   rollout:
-    name: vllm
+    name: rankgrpo
     n: 8
     dtype: bfloat16
     tensor_model_parallel_size: 2
     temperature: 1.0
     top_p: 1.0
+    top_k: -1
     do_sample: true
     gpu_memory_utilization: 0.25
     max_num_batched_tokens: 40960
     max_num_seqs: 512
+    log_prob_use_dynamic_bsz: false
+    log_prob_micro_batch_size_per_gpu: 32
     log_prob_max_token_len_per_gpu: 40960
     enable_chunked_prefill: true
-    calculate_log_probs: false
+    calculate_log_probs: true
     layered_summon: false
+    enforce_eager: false
+    free_cache_engine: false
+    enable_sleep_mode: false
+    agent:
+      num_workers: 8
+      default_agent_loop: single_turn_agent
+      agent_loop_manager_class: verl_gr.recipes.rankgrpo.rankgrpo_agent_loop.RankGRPOAgentLoopManager
+    val_kwargs:
+      n: 8
+      do_sample: true
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
     engine_kwargs:
       vllm:
+        disable_custom_all_reduce: true
         max_logprobs: 20
     profiler:
       enable: ${oc.select:actor_rollout_ref.actor.profiler.enable,false}
@@ -107,9 +139,9 @@ actor_rollout_ref:
       ranks: ${oc.select:actor_rollout_ref.actor.profiler.ranks,[]}
 
   model:
-    enable_activation_offload: true
+    enable_activation_offload: false
     enable_gradient_checkpointing: true
-    use_remove_padding: false
+    use_remove_padding: true
     use_fused_kernels: false
     fused_kernel_options:
       impl_backend: torch
@@ -125,8 +157,19 @@ algorithm:
     normalize_by_std: true
     year_tolerance: 2
     exclude_seen: true
+    apply_extra_length_shaping: true
+    end_of_list_reward: 0.1
+    extra_token_penalty: -0.3
+    early_stop_penalty: -0.1
     gt_catalog_path: null
-    importance_sampling_level: token
+    importance_sampling_level: item
+    loss_mode: trl_match
+    old_log_prob_mode: current
+  rollout_correction:
+    rollout_is: null
+    rollout_rs: null
+    bypass_mode: true
+    loss_type: ppo_clip
 
 trainer:
   project_name: RankGRPO
@@ -175,4 +218,3 @@ global_profiler:
 ray_init:
   num_cpus: null
   timeline_json_file: null
-

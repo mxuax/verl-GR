@@ -5,22 +5,35 @@
 # Sets val_before_train=true so the trainer validates then exits.
 #
 # Usage:
-#   bash scripts/eval_sft_onerec.sh <sft_ckpt_path>
+#   bash scripts/misc/sft_eval/eval_sft_onerec.sh <sft_ckpt_path>
 
 set -euo pipefail
 
 SFT_CKPT="${1:?Usage: $0 <sft_ckpt_path>}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERL_GR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${VERL_GR_ROOT}"
+
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-EVAL_OUTPUT="./outputs/eval_sft_onerec_${TIMESTAMP}"
+EVAL_OUTPUT="${VERL_GR_ROOT}/outputs/eval_sft_onerec_${TIMESTAMP}"
+
+# Overfitting verification: same train split as .match_openoneonerec.sh GRPO run.
+DATA_DIR="${DATA_DIR:-/home/dyvm6xra/dyvm6xrauser45/fred/openonerec_fredfork/data}"
+TRAIN_PARQUET="${DATA_DIR}/train_1k.parquet"
+VAL_FILES="[${TRAIN_PARQUET}]"
 
 echo "============================================"
 echo "OpenOneRec SFT Evaluation"
 echo "  checkpoint    = ${SFT_CKPT}"
 echo "  output        = ${EVAL_OUTPUT}"
+echo "  val_files     = ${VAL_FILES} (train, overfitting eval)"
 echo "============================================"
 
 python -m verl_gr.trainers.main_ppo \
     ++task.name=openonerec \
+    data.train_files="${VAL_FILES}" \
+    data.val_files="${VAL_FILES}" \
     actor_rollout_ref.model.path="${SFT_CKPT}" \
     actor_rollout_ref.rollout.name=two_stage \
     ++actor_rollout_ref.rollout.mode=async \

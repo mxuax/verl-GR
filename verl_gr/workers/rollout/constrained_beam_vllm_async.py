@@ -44,7 +44,7 @@ class ConstrainedBeamvLLMHttpServer(vLLMHttpServer):
     _MAX_CONSTRAINED_BEAM_CACHE_SIZE = 1024
 
     def __init__(self, *args, **kwargs):
-        os.environ["VERL_ROLLOUT_ZMQ_NAMESPACE"] = "constrained-beam"
+        os.environ.setdefault("VERL_ROLLOUT_ZMQ_NAMESPACE", "constrained-beam")
         os.environ.setdefault("VERL_ZMQ_SOCKET_PREFIX", "verl-gr-constrained-beam")
         super().__init__(*args, **kwargs)
         self._constrained_beam_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()

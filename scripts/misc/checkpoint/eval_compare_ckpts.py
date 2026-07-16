@@ -9,14 +9,14 @@ Runs constrained beam search on test data and reports HR@k / NDCG@k,
 plus EOS-only output statistics.
 
 Usage:
-    python scripts/eval_compare_ckpts.py \
+    python scripts/misc/checkpoint/eval_compare_ckpts.py \
         --ckpt /path/to/checkpoint \
         --test_file /path/to/test.csv \
         --info_file /path/to/info.txt \
         --num_beams 50
 
 Or compare two checkpoints:
-    python scripts/eval_compare_ckpts.py \
+    python scripts/misc/checkpoint/eval_compare_ckpts.py \
         --ckpt /path/to/verl_gr_ckpt \
         --ckpt2 /path/to/minionerec_ckpt \
         --test_file /path/to/test.csv \
@@ -346,12 +346,12 @@ def _load_fsdp_sharded(ckpt_path: str, shards: list[Path], device: str):
         return model.to(device), tokenizer
 
     print("[load] FSDP shards detected. Two options:")
-    print(f"  1) Manually merge via: python scripts/merge_fsdp_ckpt.py --ckpt {ckpt_path}")
+    print(f"  1) Manually merge via: python scripts/misc/checkpoint/merge_fsdp_ckpt.py --ckpt {ckpt_path}")
     print(f"  2) Use the MiniOneRec evaluate.py (which loads natively) for the original ckpt")
     print(f"  3) Set model.path to a base model + load the FSDP weights via verl's CheckpointHandler")
     raise RuntimeError(
         "FSDP sharded checkpoint requires manual conversion first.\n"
-        f"Run: python scripts/merge_fsdp_ckpt.py --ckpt {ckpt_path} --base_model /path/to/base/Qwen2-0.5B --output {output_dir}\n"
+        f"Run: python scripts/misc/checkpoint/merge_fsdp_ckpt.py --ckpt {ckpt_path} --base_model /path/to/base/Qwen2-0.5B --output {output_dir}\n"
         f"Then re-run this script with --ckpt {output_dir}"
     )
 

@@ -222,7 +222,7 @@ class RankGRPODataset(Dataset):
         row["input_ids"] = input_ids[0]
         row["attention_mask"] = attention_mask[0]
         row["position_ids"] = compute_position_id_with_mask(attention_mask)[0]
-        row["raw_prompt_ids"] = self._encode_prompt(row)[-self.max_prompt_length :]
+        row["raw_prompt_ids"] = np.array(self._encode_prompt(row)[-self.max_prompt_length :], dtype=np.int64)
         row["raw_prompt"] = messages
         row["full_prompts"] = raw_prompt
         row["reward_model"] = self._build_reward_model(row, index)

@@ -3,7 +3,7 @@
 Run with the SAME world_size as the checkpoint was saved with::
 
     torchrun --standalone --nnodes=1 --nproc_per_node=4 \\
-        scripts/merge_fsdp_ckpt.py \\
+        scripts/misc/checkpoint/merge_fsdp_ckpt.py \\
         --ckpt /path/to/global_step_N/actor \\
         --base_model /path/to/base/Qwen2-0.5B \\
         --output /path/to/merged_hf

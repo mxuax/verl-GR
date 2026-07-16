@@ -30,6 +30,7 @@ from verl_gr.workers.rollout.beam_config import (
     build_two_stage_sampling_params,
     get_rollout_custom_nested_value,
 )
+from verl_gr.recipes.openonerec.onerec_profile_metrics import add_openonerec_eval_aliases
 from verl_gr.trainers.task_adapter import TrainerTaskAdapter
 
 
@@ -210,14 +211,29 @@ def _add_pass_at_k_reward_info(
 def openonerec_validate(trainer):
     """OpenOneRec validation override for trainer instances."""
 
+    import hashlib
+
     data_source_lst = []
     reward_extra_infos_dict: dict[str, list] = defaultdict(list)
 
+    val_shuffle = bool(trainer.config.data.get("validation_shuffle", False))
+    data_shuffle = bool(trainer.config.data.get("shuffle", False))
+    val_max_samples = int(trainer.config.data.get("val_max_samples", -1) or -1)
     # Debug: print dataset sizes before validation
     print(
         f"[_validate] Starting validation. train_dataset size: {len(trainer.train_dataset)}, "
         f"val_dataset size: {len(trainer.val_dataset)}"
     )
+    print(
+        f"[_validate] Fairness locks: val_max_samples={val_max_samples}, "
+        f"data.shuffle={data_shuffle}, data.validation_shuffle={val_shuffle}, "
+        f"val_dataloader_batches={len(trainer.val_dataloader)}"
+    )
+    if val_shuffle:
+        print(
+            "[_validate] WARNING: validation_shuffle=True — val prompt order is randomized; "
+            "disable with data.validation_shuffle=false for apples-to-apples TB comparison."
+        )
     print(f"[_validate] actor_rollout_wg world_size: {trainer.actor_rollout_wg.world_size}")
 
     sample_inputs = []
@@ -229,6 +245,15 @@ def openonerec_validate(trainer):
     cumulative_raw_prompts = 0
     cumulative_expanded_requests = 0
     batch_idx = 0
+    rollout_config = trainer.config.actor_rollout_ref.rollout
+    rollout_custom = rollout_config.get("custom") or {}
+    is_two_stage_rollout_val = rollout_config.get("name") == "two_stage"
+    beam_width = int(
+        rollout_custom.get(
+            BEAM_WIDTH_KEY,
+            rollout_custom.get("stage2_beam_size", 32),
+        )
+    )
 
     for test_data in trainer.val_dataloader:
         test_batch = DataProto.from_single_dict(test_data)
@@ -236,23 +261,22 @@ def openonerec_validate(trainer):
         raw_batch_size = len(test_batch)
         batch_idx += 1
         val_kwargs = trainer.config.actor_rollout_ref.rollout.val_kwargs
-        rollout_config = trainer.config.actor_rollout_ref.rollout
         use_beam_search_val = val_kwargs.get("use_beam_search", False)
-        is_two_stage_rollout_val = rollout_config.get("name") == "two_stage"
-        rollout_custom = rollout_config.get("custom") or {}
-        beam_width = int(
-            rollout_custom.get(
-                BEAM_WIDTH_KEY,
-                rollout_custom.get("stage2_beam_size", 32),
-            )
-        )
 
+        # OneRecTask.expand_rollout_counts already bakes beam_width into val_kwargs.n
+        # (val_n = base_val_n * beam_width). Do NOT multiply by beam_width again here —
+        # that used to create 1024× slots per prompt (32×32) and multi-hour validation.
         if is_two_stage_rollout_val and trainer.async_rollout_mode:
-            repeat_times = int(val_kwargs.n) * beam_width
+            repeat_times = max(1, int(val_kwargs.n))
             print(
                 "[Validation Debug] Async two-stage request expansion: "
-                f"repeat_times={repeat_times} (val_n={val_kwargs.n}, beam_width={beam_width})"
+                f"repeat_times={repeat_times} (val_n={val_kwargs.n}, beam_width={beam_width}; "
+                "val_n already includes beam)"
             )
+            # Stable sample index is required so consecutive beam slots group into one
+            # stage-1 CoT share (OpenOneRecAgentLoopWorker concurrent_groups logic).
+            if "index" not in test_batch.non_tensor_batch:
+                test_batch.non_tensor_batch["index"] = np.arange(len(test_batch), dtype=object)
             test_batch = test_batch.repeat(repeat_times=repeat_times, interleave=True)
         elif not use_beam_search_val:
             test_batch = test_batch.repeat(repeat_times=val_kwargs.n, interleave=True)
@@ -292,6 +316,7 @@ def openonerec_validate(trainer):
             "interaction_kwargs",
             "agent_name",
             "extra_info",
+            "index",
         ):
             if key in test_batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append(key)
@@ -497,6 +522,18 @@ def openonerec_validate(trainer):
     else:
         print(f"[Validation Debug] No duplicate prompts found. Total unique prompts: {len(prompt_counts)}")
     print(f"[Validation Debug] Total samples: {len(sample_inputs)}, Total scores: {len(sample_scores)}")
+    # Unique prompts (beam/val_n expansion repeats the same prompt text).
+    unique_prompts = list(dict.fromkeys(sample_inputs))
+    prompt_fingerprint = hashlib.sha1(
+        ("\n".join(str(p)[:256] for p in unique_prompts)).encode("utf-8", errors="replace")
+    ).hexdigest()[:12]
+    print(
+        f"[Validation Fairness] n_unique_prompts={len(unique_prompts)}, "
+        f"n_scored_responses={len(sample_scores)}, "
+        f"responses_per_prompt≈{len(sample_scores) / max(len(unique_prompts), 1):.1f}, "
+        f"prompt_fingerprint={prompt_fingerprint}, "
+        f"validation_shuffle={val_shuffle}"
+    )
 
     for key_info, values in reward_extra_infos_dict.items():
         assert len(values) == 0 or len(values) == len(sample_scores), (
@@ -556,6 +593,13 @@ def openonerec_validate(trainer):
         metric_dict["val/response_length/mean"] = response_lengths_tensor.float().mean().item()
         metric_dict["val/response_length/max"] = response_lengths_tensor.max().item()
         metric_dict["val/response_length/min"] = response_lengths_tensor.min().item()
+
+    add_openonerec_eval_aliases(
+        metric_dict,
+        preferred_n=beam_width if is_two_stage_rollout_val else None,
+        n_prompts=len(unique_prompts),
+        n_responses=len(sample_scores),
+    )
     return metric_dict
 
 

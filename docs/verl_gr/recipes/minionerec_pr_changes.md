@@ -59,7 +59,7 @@ See also: [minionerec_mapping.md](./minionerec_mapping.md) for the behavioral co
 ### 3.4 NVTX profiling (optional)
 
 - Same range names in MiniOneRec trainer and verl-GR (`gen.generate`, `ref.forward`, `reward.compute`, `actor.forward_backward`, `logprob.completion_only`).
-- Tooling: `scripts/compare_nsys_nvtx.py`.
+- Tooling: `scripts/misc/profiling/compare_nsys_nvtx.py`.
 
 Observed overhead: Nsight typically adds ~10–40% per step; ~1s on a ~4s step is within expectations.
 
@@ -91,7 +91,7 @@ See [tests/README.md](../tests/README.md) and [docs/verl_gr/architecture.md](../
 
 - `run_minionerec_grpo_rl_aligned.sh` — primary MiniOneRec training entry (renamed from `run_minionerec_grpo_align_rl_sh_4gpu.sh`).
 - `run_minionerec_grpo.sh` — generic launcher.
-- `compare_nsys_nvtx.py`, `convert_ddp_to_hf.py`, `eval_compare_ckpts.py`, other recipe launchers.
+- `misc/profiling/compare_nsys_nvtx.py`, `misc/checkpoint/convert_ddp_to_hf.py`, `misc/checkpoint/eval_compare_ckpts.py`, other recipe launchers.
 
 **Removed** (redundant / machine-specific ablation helpers)
 

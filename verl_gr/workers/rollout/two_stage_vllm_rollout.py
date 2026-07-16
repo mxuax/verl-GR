@@ -47,8 +47,9 @@ class TwoStagevLLMRollout(ServerAdapter):
             )
             local_world_size = int(os.environ["RAY_LOCAL_WORLD_SIZE"])
             local_rank = self.rollout_rank % local_world_size
+            namespace = os.environ.get("VERL_ROLLOUT_ZMQ_NAMESPACE", "two-stage")
             self.zmq_handle = build_zmq_handle(
-                namespace="two-stage",
+                namespace=namespace,
                 replica_rank=self.replica_rank,
                 local_rank=local_rank,
             )

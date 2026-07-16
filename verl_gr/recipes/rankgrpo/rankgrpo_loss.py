@@ -155,7 +155,8 @@ def _build_debug_metrics(
 
     # KL per-token
     if use_kl and kld is not None:
-        metrics["dbg/kl_tok_mean"] = Metric("mean", value=(kld * debug_mask).sum().detach() / mask_sum)
+        kl_tok_mean = (kld * debug_mask).sum().detach() / mask_sum
+        metrics["dbg/kl_tok_mean"] = Metric("mean", value=kl_tok_mean)
 
     # aggregated losses
     metrics["dbg/pg_loss_agg"] = Metric("mean", value=pg_loss.detach() if isinstance(pg_loss, torch.Tensor) else pg_loss)

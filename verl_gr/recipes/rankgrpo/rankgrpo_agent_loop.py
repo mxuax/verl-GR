@@ -30,7 +30,7 @@ from verl.utils.ray_utils import auto_await
 from verl.utils.tokenizer import normalize_token_ids
 from verl.utils.torch_functional import get_response_mask
 from verl.workers.rollout.replica import TokenOutput
-from verl.workers.rollout.vllm_rollout.vllm_async_server import vLLMReplica
+from verl_gr.workers.rollout.rankgrpo_vllm_async import RankGRPOvLLMReplica
 
 
 def _cfg_get(config: Any, key: str, default=None):
@@ -87,6 +87,9 @@ def build_trl_completion_mask(response_ids: list[int], eos_token_id: int | list[
     response_tensor = torch.tensor([response_ids], dtype=torch.long)
     mask = get_response_mask(response_tensor, eos_token=eos_token_id, dtype=torch.int64)
     return mask[0].tolist()
+
+
+from verl_gr.recipes.rankgrpo.rankgrpo_rollout_utils import maybe_truncate_rankgrpo_response
 
 
 def _mask_rollout_logprobs(
@@ -205,6 +208,12 @@ class RankGRPOAgentLoopWorker(AgentLoopWorker):
         outputs = []
         for token_output in token_outputs:
             response_ids = token_output.token_ids[: self.rollout_config.response_length]
+            response_ids = maybe_truncate_rankgrpo_response(
+                response_ids,
+                self.tokenizer,
+                eos_token_id=eos_token_id,
+            )
+            response_ids = response_ids[: self.rollout_config.response_length]
             response_mask = build_trl_completion_mask(response_ids, eos_token_id)
             response_logprobs = _mask_rollout_logprobs(
                 (
@@ -243,7 +252,7 @@ class RankGRPOAgentLoopManager(AgentLoopManager):
     """AgentLoopManager that keeps repeated Rank-GRPO rollout groups colocated."""
 
     def __init__(self, *args, **kwargs):
-        self.rollout_replica_class = vLLMReplica
+        self.rollout_replica_class = RankGRPOvLLMReplica
         self.agent_loop_workers_class = ray.remote(RankGRPOAgentLoopWorker)
         super().__init__(*args, **kwargs)
 

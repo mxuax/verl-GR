@@ -8,12 +8,12 @@ can load directly.
 
 Usage:
     # Convert a single checkpoint
-    python scripts/convert_ddp_to_hf.py \\
+    python scripts/misc/checkpoint/convert_ddp_to_hf.py \\
         --ckpt outputs/.../global_step_165/actor \\
         --base_model /path/to/Qwen2-0.5B
 
     # Batch convert all actor checkpoints under a directory
-    python scripts/convert_ddp_to_hf.py \\
+    python scripts/misc/checkpoint/convert_ddp_to_hf.py \\
         --ckpt outputs/my_run/ckpt \\
         --base_model /path/to/Qwen2-0.5B \\
         --batch

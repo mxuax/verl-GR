@@ -23,6 +23,7 @@ data:
   max_prompt_length: 10240
   prompt_key: prompt
   shuffle: false
+  validation_shuffle: false
   val_batch_size: 100
   max_response_length: 2048
   filter_overlong_prompts: true
@@ -103,11 +104,11 @@ actor_rollout_ref:
       stage2_decode_mode: vllm_native_beam
       two_stage_max_inflight_requests: 8
       validation_adaptive_concurrency: true
-      validation_min_concurrent_requests: 64
-      validation_max_concurrent_requests: 256
+      validation_min_concurrent_requests: 128
+      validation_max_concurrent_requests: 512
       validation_target_gpu_utilization: 85.0
       validation_gpu_util_tolerance: 7.5
-      validation_concurrency_step: 32
+      validation_concurrency_step: 64
       beam_search_params:
         max_tokens: 3
       decode_config:

@@ -8,19 +8,16 @@ SCRIPT_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 VERL_GR_ROOT="$(dirname "${SCRIPT_DIR}")"
 # shellcheck source=lora_env.sh
 source "${SCRIPT_DIR}/lora_env.sh"
-PROJECT_ROOT="$(dirname "${VERL_GR_ROOT}")"
-OPENONEREC_RECIPE_PATH="${PROJECT_ROOT}/verl-GR/verl_gr/recipes/openonerec/onerec_recipe.py"
+OPENONEREC_RECIPE_PATH="${OPENONEREC_RECIPE_PATH:-${VERL_GR_ROOT}/verl_gr/recipes/openonerec/onerec_recipe.py}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
 
-# Cluster auto-discovery via Ray (skip when N_GPUS/N_NODES are preset — avoids hang on ray.init auto).
-if [[ -z "${N_GPUS:-}" || -z "${N_NODES:-}" ]]; then
-  RAY_INFO="$("${PYTHON_BIN}" -c "import ray; ray.init(address='auto', ignore_reinit_error=True); nodes=[n for n in ray.nodes() if n.get('Alive')]; gpus=next((int(n.get('Resources',{}).get('GPU',0)) for n in nodes if n.get('Resources',{}).get('GPU',0)>0),0); print(f'{len(nodes)} {gpus}')" 2>/dev/null || true)"
-  N_NODES="${N_NODES:-$(echo "${RAY_INFO}" | awk '{print $1}')}"
-  N_GPUS="${N_GPUS:-$(echo "${RAY_INFO}" | awk '{print $2}')}"
-fi
+# Cluster auto-discovery via Ray (fallback to single node defaults).
+RAY_INFO="$("${PYTHON_BIN}" -c "import ray; ray.init(address='auto', ignore_reinit_error=True); nodes=[n for n in ray.nodes() if n.get('Alive')]; gpus=next((int(n.get('Resources',{}).get('GPU',0)) for n in nodes if n.get('Resources',{}).get('GPU',0)>0),0); print(f'{len(nodes)} {gpus}')" 2>/dev/null || true)"
+N_NODES="${N_NODES:-$(echo "${RAY_INFO}" | awk '{print $1}')}"
+N_GPUS="${N_GPUS:-$(echo "${RAY_INFO}" | awk '{print $2}')}"
 if [[ -z "${N_NODES}" || -z "${N_GPUS}" || "${N_NODES}" == "0" ]]; then
   N_NODES=1
   # N_GPUS=2
@@ -39,6 +36,7 @@ MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-2048}"
 TOTAL_EPOCHS="${TOTAL_EPOCHS:-20}"
 ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-2048}"
 ROLLOUT_ENFORCE_EAGER="${ROLLOUT_ENFORCE_EAGER:-True}"
+ROLLOUT_GPU_MEMORY_UTILIZATION="${ROLLOUT_GPU_MEMORY_UTILIZATION:-0.35}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-$((N_GPUS * N_NODES))}"
 
 ROLLOUT_N="${ROLLOUT_N:-1}"
@@ -46,18 +44,19 @@ ROLLOUT_MODE="${ROLLOUT_MODE:-async}"
 # Validation logging controls:
 # - test_freq controls when validation runs.
 # - log_val_generations controls how many samples are printed per validation.
-TEST_FREQ="${TEST_FREQ:-100}"
+TEST_FREQ="${TEST_FREQ:-50}"
 SAVE_FREQ="${SAVE_FREQ:-${TEST_FREQ}}"
 VAL_LOG_GENERATIONS="${VAL_LOG_GENERATIONS:-4}"
 VAL_DUMP_GENERATIONS="${VAL_DUMP_GENERATIONS:-True}"
 VAL_MAX_SAMPLES="${VAL_MAX_SAMPLES:--1}"
+TRAIN_MAX_SAMPLES="${TRAIN_MAX_SAMPLES:--1}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-100}"
 VALIDATION_ADAPTIVE_CONCURRENCY="${VALIDATION_ADAPTIVE_CONCURRENCY:-True}"
-VALIDATION_MIN_CONCURRENT_REQUESTS="${VALIDATION_MIN_CONCURRENT_REQUESTS:-32}"
-VALIDATION_MAX_CONCURRENT_REQUESTS="${VALIDATION_MAX_CONCURRENT_REQUESTS:-64}"
+VALIDATION_MIN_CONCURRENT_REQUESTS="${VALIDATION_MIN_CONCURRENT_REQUESTS:-64}"
+VALIDATION_MAX_CONCURRENT_REQUESTS="${VALIDATION_MAX_CONCURRENT_REQUESTS:-512}"
 VALIDATION_TARGET_GPU_UTILIZATION="${VALIDATION_TARGET_GPU_UTILIZATION:-85.0}"
 VALIDATION_GPU_UTIL_TOLERANCE="${VALIDATION_GPU_UTIL_TOLERANCE:-7.5}"
-VALIDATION_CONCURRENCY_STEP="${VALIDATION_CONCURRENCY_STEP:-32}"
+VALIDATION_CONCURRENCY_STEP="${VALIDATION_CONCURRENCY_STEP:-64}"
 VAL_THINKING_TEMPERATURE="${VAL_THINKING_TEMPERATURE:-0.6}"
 VAL_THINKING_TOP_P="${VAL_THINKING_TOP_P:-0.95}"
 VAL_THINKING_TOP_K="${VAL_THINKING_TOP_K:-50}"
@@ -80,18 +79,20 @@ LAUNCH_TIMESTAMP="${LAUNCH_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-${BASE_MODEL_DIRNAME}_${LAUNCH_TIMESTAMP}}"
 OUTPUT_DIR="${OUTPUT_DIR:-${VERL_GR_ROOT}/outputs/${EXPERIMENT_NAME}}"
 WANDB_MODE="${WANDB_MODE:-offline}"
+LOGGER_BACKENDS="${LOGGER_BACKENDS:-[tensorboard]}"
 RAY_TMPDIR="${RAY_TMPDIR:-${OUTPUT_DIR}/ray_tmp}"
 RAY_TMPDIR_FALLBACK_ROOT="${RAY_TMPDIR_FALLBACK_ROOT:-${TMPDIR:-/tmp}}"
-RAY_TMPDIR_MAX_LEN="${RAY_TMPDIR_MAX_LEN:-60}"
+RAY_TMPDIR_MAX_LEN="${RAY_TMPDIR_MAX_LEN:-30}"
 if (( ${#RAY_TMPDIR} > RAY_TMPDIR_MAX_LEN )); then
-  # Ray creates deep session/socket paths under _temp_dir. Long roots can exceed
-  # Linux AF_UNIX path limits (107 bytes), so fallback to a short root.
-  SHORT_USER="${USER:-user}"
-  RAY_TMPDIR="${RAY_TMPDIR_FALLBACK_ROOT}/vgr_ray_${SHORT_USER}"
+  # Ray appends session_*/sockets/plasma_store under _temp_dir; keep root short.
+  SHORT_TAG="$(printf '%s' "${RAY_JOB_TAG:-$$}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-16)"
+  RAY_TMPDIR="${RAY_TMPDIR_FALLBACK_ROOT}/vr_${SHORT_TAG}"
   echo "Warning: RAY_TMPDIR path too long, fallback to ${RAY_TMPDIR}" >&2
 fi
 RAY_SPILL_DIR="${RAY_SPILL_DIR:-${RAY_TMPDIR}/spill}"
 VERL_ZMQ_SOCKET_PREFIX="${VERL_ZMQ_SOCKET_PREFIX:-verl-gr-openonerec-${LAUNCH_TIMESTAMP}-$$}"
+VERL_ROLLOUT_ZMQ_NAMESPACE="${VERL_ROLLOUT_ZMQ_NAMESPACE:-openonerec}"
+RAY_NAMESPACE="${RAY_NAMESPACE:-openonerec_${LAUNCH_TIMESTAMP}_$$}"
 
 mkdir -p "${VERL_GR_ROOT}/logs" "${OUTPUT_DIR}" "${RAY_TMPDIR}" "${RAY_SPILL_DIR}"
 if [[ "${VAL_DUMP_GENERATIONS}" == "True" ]]; then
@@ -110,6 +111,7 @@ export WANDB_MODE
 export RAY_TMPDIR
 export TMPDIR="${RAY_TMPDIR}"
 export VERL_ZMQ_SOCKET_PREFIX
+export VERL_ROLLOUT_ZMQ_NAMESPACE
 
 echo "==================================="
 echo "OpenOneRec GRPO (verl-GR runtime)"
@@ -119,7 +121,7 @@ echo "Model: ${BASE_MODEL}"
 echo "Rollout N: ${ROLLOUT_N}"
 echo "Max tokens per GPU: ${MAX_TOKENS_PER_GPU}"
 echo "Validation test_freq: ${TEST_FREQ}, save_freq: ${SAVE_FREQ}, log_val_generations: ${VAL_LOG_GENERATIONS}"
-echo "Validation max samples: ${VAL_MAX_SAMPLES}, val batch size: ${VAL_BATCH_SIZE}"
+echo "Validation max samples: ${VAL_MAX_SAMPLES}, train max samples: ${TRAIN_MAX_SAMPLES}, val batch size: ${VAL_BATCH_SIZE}"
 echo "Validation adaptive concurrency: ${VALIDATION_ADAPTIVE_CONCURRENCY}"
 echo "Validation min/max concurrent requests: ${VALIDATION_MIN_CONCURRENT_REQUESTS}/${VALIDATION_MAX_CONCURRENT_REQUESTS}"
 echo "Validation target gpu util +/- tol: ${VALIDATION_TARGET_GPU_UTILIZATION}% +/- ${VALIDATION_GPU_UTIL_TOLERANCE}%"
@@ -135,9 +137,13 @@ else
   echo "LoRA: disabled (full-parameter training)"
 fi
 echo "Output: ${OUTPUT_DIR}"
+echo "TensorBoard: ${TENSORBOARD_DIR}"
+echo "Logger backends: ${LOGGER_BACKENDS}"
 echo "Ray temp dir: ${RAY_TMPDIR}"
 echo "Ray spill dir: ${RAY_SPILL_DIR}"
 echo "ZMQ socket prefix: ${VERL_ZMQ_SOCKET_PREFIX}"
+echo "ZMQ rollout namespace: ${VERL_ROLLOUT_ZMQ_NAMESPACE}"
+echo "Ray namespace: ${RAY_NAMESPACE}"
 echo "==================================="
 
 # Guardrail: block accidental fallback to legacy OpenOneRec recipe imports.
@@ -162,7 +168,10 @@ done
   data.enable_nonthink="${ENABLE_NONTHINK}" \
   data.use_force_prefix="${USE_FORCE_PREFIX}" \
   data.val_max_samples="${VAL_MAX_SAMPLES}" \
+  data.train_max_samples="${TRAIN_MAX_SAMPLES}" \
   data.val_batch_size="${VAL_BATCH_SIZE}" \
+  data.shuffle=false \
+  ++data.validation_shuffle=false \
   data.train_batch_size="${TRAIN_BATCH_SIZE}" \
   data.custom_cls.path="${OPENONEREC_RECIPE_PATH}" \
   custom_reward_function.path="${OPENONEREC_RECIPE_PATH}" \
@@ -174,6 +183,7 @@ done
   actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_TOKENS_PER_GPU}" \
   actor_rollout_ref.rollout.max_num_seqs="${ROLLOUT_MAX_NUM_SEQS}" \
   actor_rollout_ref.rollout.enforce_eager="${ROLLOUT_ENFORCE_EAGER}" \
+  actor_rollout_ref.rollout.gpu_memory_utilization="${ROLLOUT_GPU_MEMORY_UTILIZATION}" \
   actor_rollout_ref.rollout.custom.validation_adaptive_concurrency="${VALIDATION_ADAPTIVE_CONCURRENCY}" \
   actor_rollout_ref.rollout.custom.validation_min_concurrent_requests="${VALIDATION_MIN_CONCURRENT_REQUESTS}" \
   actor_rollout_ref.rollout.custom.validation_max_concurrent_requests="${VALIDATION_MAX_CONCURRENT_REQUESTS}" \
@@ -203,16 +213,20 @@ done
   trainer.default_local_dir="${OUTPUT_DIR}/ckpt" \
   trainer.test_freq="${TEST_FREQ}" \
   trainer.save_freq="${SAVE_FREQ}" \
-  trainer.val_before_train=True \
+  trainer.val_before_train="${VAL_BEFORE_TRAIN:-True}" \
   trainer.log_val_generations="${VAL_LOG_GENERATIONS}" \
   trainer.validation_data_dir=${VALIDATION_DATA_DIR_ARG} \
   ++trainer.best_ckpt_prune_enable="${BEST_CKPT_PRUNE_ENABLE}" \
   ++trainer.best_ckpts_to_keep="${BEST_CKPTS_TO_KEEP}" \
   ++trainer.best_ckpt_metric="${BEST_CKPT_METRIC}" \
-  trainer.logger='[tensorboard, wandb]' \
+  trainer.logger="${LOGGER_BACKENDS}" \
   trainer.remove_previous_ckpt_in_save=False \
   +ray_kwargs.ray_init._temp_dir="${RAY_TMPDIR}" \
   +ray_kwargs.ray_init.object_spilling_directory="${RAY_SPILL_DIR}" \
+  +ray_kwargs.ray_init.namespace="${RAY_NAMESPACE}" \
+  +ray_kwargs.ray_init.runtime_env.env_vars.VERL_ZMQ_SOCKET_PREFIX="'${VERL_ZMQ_SOCKET_PREFIX}'" \
+  +ray_kwargs.ray_init.runtime_env.env_vars.VERL_ROLLOUT_ZMQ_NAMESPACE="'${VERL_ROLLOUT_ZMQ_NAMESPACE}'" \
+  +ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH="'${PYTHONPATH:-}'" \
   global_profiler.save_path="${GLOBAL_PROFILER_SAVE_PATH:-${OUTPUT_DIR}/profiles}" \
   actor_rollout_ref.ref.strategy="${FSDP_STRATEGY}" \
   actor_rollout_ref.actor.strategy="${FSDP_STRATEGY}" \

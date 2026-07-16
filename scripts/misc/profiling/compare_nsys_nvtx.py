@@ -2,7 +2,7 @@
 """Compare two Nsight Systems NVTX summaries and rank timing differences.
 
 Usage:
-  python scripts/compare_nsys_nvtx.py \
+  python scripts/misc/profiling/compare_nsys_nvtx.py \
     --left mini_nvtxsum.csv --right verl_nvtxsum.csv --topk 30
 """
 
