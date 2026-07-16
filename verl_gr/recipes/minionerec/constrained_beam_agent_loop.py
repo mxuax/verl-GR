@@ -382,6 +382,7 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
             "temperature": float(getattr(self.rollout_config, "temperature", 1.0)),
             "max_new_tokens": max_new_tokens,
             "validate": is_validate,
+            "calculate_log_probs": bool(getattr(self.rollout_config, "calculate_log_probs", False)),
         }
 
         # Pass pre-tokenized prompt IDs when available (avoids re-tokenization)
@@ -395,24 +396,34 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
 
         # Reassemble per-rank prompt shards back into original prompt-group order.
         ordered_response_groups: list[list[list[int]] | None] = [None] * n_unique
+        ordered_logprob_groups: list[list[list[float]] | None] = [None] * n_unique
         if isinstance(result, list):
             for rank_out in result:
                 if isinstance(rank_out, dict):
                     prompt_indices = list(rank_out.get("prompt_indices", []))
                     response_groups = list(rank_out.get("response_ids", []))
-                    for prompt_idx, responses_for_prompt in zip(prompt_indices, response_groups, strict=True):
+                    logprob_groups = list(rank_out.get("response_logprobs", []))
+                    for pos, (prompt_idx, responses_for_prompt) in enumerate(
+                        zip(prompt_indices, response_groups, strict=True)
+                    ):
                         ordered_response_groups[int(prompt_idx)] = [list(r) for r in responses_for_prompt]
+                        if pos < len(logprob_groups):
+                            ordered_logprob_groups[int(prompt_idx)] = [list(lp) for lp in logprob_groups[pos]]
         elif isinstance(result, dict):
             prompt_indices = list(result.get("prompt_indices", []))
             response_groups = list(result.get("response_ids", []))
-            for prompt_idx, responses_for_prompt in zip(prompt_indices, response_groups, strict=True):
+            logprob_groups = list(result.get("response_logprobs", []))
+            for pos, (prompt_idx, responses_for_prompt) in enumerate(zip(prompt_indices, response_groups, strict=True)):
                 ordered_response_groups[int(prompt_idx)] = [list(r) for r in responses_for_prompt]
+                if pos < len(logprob_groups):
+                    ordered_logprob_groups[int(prompt_idx)] = [list(lp) for lp in logprob_groups[pos]]
 
         if any(group is None for group in ordered_response_groups):
             missing = [str(i) for i, group in enumerate(ordered_response_groups) if group is None]
             raise RuntimeError(f"HF constrained beam returned incomplete prompt shards: missing {', '.join(missing)}")
 
         all_resp_ids = [resp for group in ordered_response_groups for resp in (group or [])]
+        all_rollout_logps = [lp for group in ordered_logprob_groups if group is not None for lp in group]
         n_total = len(all_resp_ids)
         if n_total == 0:
             return prompts
@@ -443,6 +454,18 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
         for i, r in enumerate(all_resp_ids):
             if r:
                 responses[i, :len(r)] = torch.tensor(r, dtype=torch.long, device=device)
+        rollout_log_probs = None
+        if bool(getattr(self.rollout_config, "calculate_log_probs", False)):
+            if len(all_rollout_logps) != n_total:
+                raise RuntimeError(
+                    f"HF constrained beam expected {n_total} rollout logprob rows, "
+                    f"got {len(all_rollout_logps)}."
+                )
+            rollout_log_probs = torch.zeros((n_total, max_resp), dtype=torch.float32, device=device)
+            for i, logps in enumerate(all_rollout_logps):
+                if logps:
+                    n = min(len(logps), max_resp)
+                    rollout_log_probs[i, :n] = torch.tensor(logps[:n], dtype=torch.float32, device=device)
 
         prompt_ids_exp = _to_dense(prompts.batch["input_ids"])
         attn_exp = _to_dense(prompts.batch["attention_mask"])
@@ -479,14 +502,17 @@ class MiniOneRecConstrainedBeamAgentLoopManager(AgentLoopManager):
 
         out_meta = dict(prompts.meta_info)
         out_meta.setdefault("timing", {})
-        out = DataProto.from_dict(
-            tensors={
+        tensors = {
                 "prompts": prompt_ids_exp,
                 "responses": responses,
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 "position_ids": position_ids,
-            },
+            }
+        if rollout_log_probs is not None:
+            tensors["rollout_log_probs"] = rollout_log_probs
+        out = DataProto.from_dict(
+            tensors=tensors,
             meta_info=out_meta,
         )
         for key, arr in prompts.non_tensor_batch.items():

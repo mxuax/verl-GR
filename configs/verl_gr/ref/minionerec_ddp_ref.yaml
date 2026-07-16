@@ -14,6 +14,11 @@ entropy_checkpointing: false
 engine_config:
   forward_only: true
   model_dtype: bf16
-  use_torch_compile: true
+  use_torch_compile: false
+  disable_flash_sdp: true
   seed: 42
   completion_only_logprob: true
+  # Match actor default: use the rmpad completion-only fast path unless the
+  # launcher explicitly requests the padded parity path.
+  completion_only_force_padded: false
+  completion_only_drop_position_ids: true

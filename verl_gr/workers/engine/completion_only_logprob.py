@@ -8,12 +8,16 @@ compute logprobs only on completion token positions via gathered rows from
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
+import os
 import torch
 from tensordict import TensorDict
 
 from verl.utils import tensordict_utils as tu
 from verl.utils.dataset.dataset_utils import DatasetPadMode
 from verl.utils.torch_functional import logprobs_from_logits
+
+_LOGPROB_DUMP_COUNTS: dict[int, int] = {}
 
 
 @contextmanager
@@ -42,6 +46,32 @@ def per_token_logps_logits_to_keep(
     completion_ids = input_ids[:, -logits_to_keep:]
     logits = logits[:, -logits_to_keep:, :]
     return selective_log_softmax(logits, completion_ids)
+
+
+def _rank() -> int:
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return int(torch.distributed.get_rank())
+    return int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")))
+
+
+def _tensor_summary(tensor: torch.Tensor | None) -> dict | None:
+    if not isinstance(tensor, torch.Tensor):
+        return None
+    t = tensor.detach()
+    out = {"shape": list(t.shape), "dtype": str(t.dtype)}
+    if t.numel() == 0:
+        return out
+    if t.is_floating_point():
+        f = t.float()
+        out.update(
+            mean=float(f.mean().item()),
+            std=float(f.std(unbiased=False).item()) if f.numel() > 1 else 0.0,
+            min=float(f.min().item()),
+            max=float(f.max().item()),
+        )
+    else:
+        out.update(min=int(t.min().item()), max=int(t.max().item()), checksum=int(t.long().sum().item()))
+    return out
 
 
 def _max_response_len(micro_batch: TensorDict) -> int:
@@ -173,22 +203,65 @@ def _build_padded_completion_inputs(micro_batch: TensorDict, max_response_len: i
     position_ids = micro_batch["position_ids"]
     pad_token_id = int(tu.get_non_tensor_data(micro_batch, key="pad_token_id", default=0) or 0)
     batch_size = micro_batch.batch_size[0]
-    max_seq_len = int(input_ids.offsets().diff().max().item())
     logits_to_keep = max_response_len + 1
 
-    input_ids_padded = torch.nested.to_padded_tensor(
-        input_ids, padding=pad_token_id, output_size=(batch_size, max_seq_len)
-    )
-    if position_ids.dim() == 3:
-        position_ids_padded = torch.nested.to_padded_tensor(
-            position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
-        ).transpose(0, 1)
+    # If the original padded tensors are still present, prefer them.  This
+    # mirrors MiniOneRec ReReTrainer's left-padded forward exactly:
+    # input_ids = cat(prompt_ids, completion_ids), attention_mask = cat(...).
+    prompts = micro_batch.get("prompts")
+    responses = micro_batch.get("responses")
+    original_attention_mask = micro_batch.get("attention_mask")
+    if (
+        isinstance(prompts, torch.Tensor)
+        and isinstance(responses, torch.Tensor)
+        and not prompts.is_nested
+        and not responses.is_nested
+    ):
+        # Dataset / rollout often left-pads prompts to data.max_prompt_length
+        # (e.g. 2560). Original MiniOneRec collates with padding=True so the
+        # forward sees only batch-max content length. Trim leading pads here
+        # before cat; otherwise force_padded SDPA OOMs on the full pad window.
+        prompt_mask = None
+        if (
+            isinstance(original_attention_mask, torch.Tensor)
+            and not original_attention_mask.is_nested
+            and original_attention_mask.shape[-1] >= prompts.shape[-1]
+        ):
+            prompt_mask = original_attention_mask[:, : prompts.shape[-1]].to(torch.int32)
+        else:
+            prompt_mask = (prompts != pad_token_id).to(torch.int32)
+        content_lens = prompt_mask.sum(dim=-1)
+        keep_prompt = int(content_lens.max().item()) if content_lens.numel() else 0
+        keep_prompt = max(keep_prompt, 1)
+        if keep_prompt < prompts.shape[-1]:
+            prompts = prompts[:, -keep_prompt:].contiguous()
+            prompt_mask = prompt_mask[:, -keep_prompt:].contiguous()
+        response_mask = (responses != pad_token_id).to(torch.int32)
+        if (
+            isinstance(original_attention_mask, torch.Tensor)
+            and not original_attention_mask.is_nested
+            and original_attention_mask.shape[-1] >= prompts.shape[-1] + responses.shape[-1]
+        ):
+            # Prefer response slice from the original full mask when available.
+            response_mask = original_attention_mask[:, -responses.shape[-1] :].to(torch.int32)
+        input_ids_padded = torch.cat([prompts, responses], dim=1)
+        attention_mask = torch.cat([prompt_mask, response_mask], dim=1)
+        position_ids_padded = None
     else:
-        position_ids_padded = torch.nested.to_padded_tensor(
-            position_ids, padding=0, output_size=(batch_size, max_seq_len)
+        max_seq_len = int(input_ids.offsets().diff().max().item())
+        input_ids_padded = torch.nested.to_padded_tensor(
+            input_ids, padding=pad_token_id, output_size=(batch_size, max_seq_len)
         )
+        if position_ids.dim() == 3:
+            position_ids_padded = torch.nested.to_padded_tensor(
+                position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
+            ).transpose(0, 1)
+        else:
+            position_ids_padded = torch.nested.to_padded_tensor(
+                position_ids, padding=0, output_size=(batch_size, max_seq_len)
+            )
+        attention_mask = (input_ids_padded != pad_token_id).to(torch.int32)
 
-    attention_mask = (input_ids_padded != pad_token_id).to(torch.int32)
     temperature = micro_batch["temperature"]
     if not isinstance(temperature, torch.Tensor):
         temperature = torch.tensor([temperature] * batch_size, device=input_ids_padded.device)
@@ -196,14 +269,16 @@ def _build_padded_completion_inputs(micro_batch: TensorDict, max_response_len: i
     model_inputs = {
         "input_ids": input_ids_padded,
         "attention_mask": attention_mask,
-        "position_ids": position_ids_padded,
         "logits_to_keep": logits_to_keep,
     }
+    if position_ids_padded is not None:
+        model_inputs["position_ids"] = position_ids_padded
     output_args = {
         "completion_only": True,
         "completion_only_padded": True,
         "logits_to_keep": logits_to_keep,
         "input_ids_padded": input_ids_padded,
+        "attention_mask_padded": attention_mask,
         "temperature": temperature,
     }
     return model_inputs, output_args
@@ -211,6 +286,94 @@ def _build_padded_completion_inputs(micro_batch: TensorDict, max_response_len: i
 
 class CompletionOnlyLogprobMixin:
     """Override LM-head logprob to use ``logits_to_keep`` (completion tokens only)."""
+
+    def _logprob_param_summaries(self) -> dict[str, dict]:
+        module = getattr(self, "module", None)
+        if module is None:
+            return {}
+        if hasattr(module, "module"):
+            module = module.module
+        substrings = os.getenv(
+            "MINIONEREC_LOGPROB_DUMP_PARAM_SUBSTR",
+            "model.embed_tokens.weight,model.layers.0.self_attn.q_proj.weight,model.layers.27.mlp.down_proj.weight,lm_head.weight",
+        ).split(",")
+        substrings = [item.strip() for item in substrings if item.strip()]
+        out = {}
+        for name, param in module.named_parameters():
+            if any(substr in name for substr in substrings):
+                data = param.detach().float()
+                flat = data.reshape(-1)
+                sample = flat[: min(16, flat.numel())].cpu()
+                out[name] = {
+                    "shape": list(param.shape),
+                    "dtype": str(param.dtype),
+                    "norm": float(data.norm().item()),
+                    "mean": float(data.mean().item()),
+                    "sample": sample.tolist(),
+                }
+        return out
+
+    def _maybe_dump_logprob_microbatch(
+        self,
+        *,
+        backend: str,
+        logits: torch.Tensor,
+        input_ids_padded: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+        completion_logps: torch.Tensor,
+        logits_to_keep: int,
+    ) -> None:
+        dump_dir = os.getenv("MINIONEREC_LOGPROB_DUMP_DIR")
+        if not dump_dir:
+            return
+        rank = _rank()
+        count = _LOGPROB_DUMP_COUNTS.get(rank, 0)
+        max_dumps = int(os.getenv("MINIONEREC_LOGPROB_DUMP_MAX", "1"))
+        if count >= max_dumps:
+            return
+        _LOGPROB_DUMP_COUNTS[rank] = count + 1
+        rows = min(int(os.getenv("MINIONEREC_LOGPROB_DUMP_ROWS", "8")), int(input_ids_padded.shape[0]))
+        topk = int(os.getenv("MINIONEREC_LOGPROB_DUMP_TOPK", "5"))
+        os.makedirs(dump_dir, exist_ok=True)
+        role = "ref" if bool(getattr(self.engine_config, "forward_only", False)) else "actor"
+        pid = os.getpid()
+
+        completion_logits = logits[:, :-1, :][:, -(logits_to_keep - 1) :, :]
+        labels = input_ids_padded[:, -(logits_to_keep - 1) :]
+        sample_logits = completion_logits[:rows].detach().float()
+        sample_labels = labels[:rows].to(sample_logits.device)
+        label_logits = sample_logits.gather(-1, sample_labels.unsqueeze(-1)).squeeze(-1)
+        logsumexp = torch.logsumexp(sample_logits, dim=-1)
+        topk_values, topk_indices = torch.topk(sample_logits, k=min(topk, sample_logits.shape[-1]), dim=-1)
+
+        payload = {
+            "backend": backend,
+            "role": role,
+            "pid": pid,
+            "rank": rank,
+            "count": count,
+            "logits_to_keep": int(logits_to_keep),
+            "input_ids_padded": input_ids_padded[:rows].detach().cpu().clone(),
+            "attention_mask": None if attention_mask is None else attention_mask[:rows].detach().cpu().clone(),
+            "labels": labels[:rows].detach().cpu().clone(),
+            "label_logits": label_logits.detach().cpu(),
+            "logsumexp": logsumexp.detach().cpu(),
+            "completion_logps": completion_logps[:rows].detach().float().cpu(),
+            "topk_values": topk_values.detach().cpu(),
+            "topk_indices": topk_indices.detach().cpu(),
+            "logits_summary": _tensor_summary(sample_logits),
+            "param_summaries": self._logprob_param_summaries(),
+        }
+        path = os.path.join(dump_dir, f"logprob_{role}_{backend}_rank{rank}_pid{pid}_dump{count}.pt")
+        torch.save(payload, path)
+        summary = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"input_ids_padded", "attention_mask", "labels", "label_logits", "logsumexp", "completion_logps", "topk_values", "topk_indices"}
+        }
+        summary["path"] = path
+        with open(path.replace(".pt", ".json"), "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2, sort_keys=True, default=str)
 
     def _completion_only_logprob_enabled(self, micro_batch: TensorDict) -> bool:
         if getattr(self.engine_config, "completion_only_logprob", False):
@@ -227,11 +390,38 @@ class CompletionOnlyLogprobMixin:
         use_remove_padding = tu.get_non_tensor_data(micro_batch, key="use_remove_padding", default=True)
         use_fused_kernels = tu.get_non_tensor_data(micro_batch, key="use_fused_kernels", default=False)
         max_response_len = _max_response_len(micro_batch)
-        is_forward_only = bool(getattr(self.engine_config, "forward_only", False))
+        force_padded = bool(getattr(self.engine_config, "completion_only_force_padded", False))
 
-        # Ref path: use padded + logits_to_keep (closer to MiniOneRec baseline behavior).
-        if is_forward_only and pad_mode == DatasetPadMode.NO_PADDING and micro_batch["input_ids"].is_nested:
-            return _build_padded_completion_inputs(micro_batch, max_response_len)
+        # Original MiniOneRec uses padded HF forward with logits_to_keep.  When
+        # remove-padding is disabled, keep that contract instead of falling back
+        # to full-sequence logits.
+        if pad_mode != DatasetPadMode.NO_PADDING or not micro_batch["input_ids"].is_nested:
+            logits_to_keep = max_response_len + 1
+            model_inputs["logits_to_keep"] = logits_to_keep
+            if bool(getattr(self.engine_config, "completion_only_drop_position_ids", False)):
+                model_inputs.pop("position_ids", None)
+            temperature = micro_batch.get("temperature", 1.0)
+            if not isinstance(temperature, torch.Tensor):
+                temperature = torch.tensor(
+                    [float(temperature)] * micro_batch.batch_size[0],
+                    device=micro_batch["input_ids"].device,
+                )
+            output_args["completion_only"] = True
+            output_args["completion_only_padded"] = True
+            output_args["logits_to_keep"] = logits_to_keep
+            output_args["input_ids_padded"] = micro_batch["input_ids"]
+            output_args["attention_mask_padded"] = model_inputs.get("attention_mask")
+            output_args["temperature"] = temperature.to(torch.float32)
+            return model_inputs, output_args
+
+        # MiniOneRec parity path: use padded + logits_to_keep only when the
+        # launcher explicitly requests it. Forward-only ref logprob can otherwise
+        # use the same rmpad completion-only fast path as the actor.
+        if force_padded and pad_mode == DatasetPadMode.NO_PADDING and micro_batch["input_ids"].is_nested:
+            model_inputs, output_args = _build_padded_completion_inputs(micro_batch, max_response_len)
+            if bool(getattr(self.engine_config, "completion_only_drop_position_ids", False)):
+                model_inputs.pop("position_ids", None)
+            return model_inputs, output_args
 
         # Fast path: rmpad + non-fused kernels. Keep original rmpad inputs and only
         # compute completion-token logprobs from gathered logits rows.
@@ -293,6 +483,14 @@ class CompletionOnlyLogprobMixin:
                     logits = logits[:, -logits_to_keep:, :]
                 logits = logits / temperature.clamp(min=1e-8).view(-1, 1, 1).to(logits.dtype)
                 completion_logps = per_token_logps_logits_to_keep(logits, input_ids_padded, logits_to_keep - 1)
+                self._maybe_dump_logprob_microbatch(
+                    backend="padded",
+                    logits=logits,
+                    input_ids_padded=input_ids_padded,
+                    attention_mask=output_args.get("attention_mask_padded"),
+                    completion_logps=completion_logps,
+                    logits_to_keep=logits_to_keep,
+                )
                 log_probs = nested_log_probs_from_completion_logps(completion_logps, micro_batch)
                 return {"log_probs": log_probs}
 

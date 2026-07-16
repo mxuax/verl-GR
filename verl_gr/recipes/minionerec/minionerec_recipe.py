@@ -58,10 +58,8 @@ class MiniOneRecTask(RecipeTaskRuntime):
                     engine_cfg = actor_cfg.engine_config
                 with open_dict(engine_cfg):
                     engine_cfg.completion_only_logprob = True
-                optim_cfg = actor_cfg.get("optim")
-                if optim_cfg is not None:
-                    with open_dict(optim_cfg):
-                        optim_cfg.optimizer = "paged_adamw_32bit"
+                # Keep optimizer config-driven. The default YAML uses bnb, but
+                # alignment probes must be able to switch to torch AdamW.
 
         ref_cfg = actor_rollout_ref.get("ref")
         if ref_cfg is not None:

@@ -62,8 +62,8 @@ export ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-1.0}"
 export LEARNING_RATE="${LEARNING_RATE:-1e-5}"
 export KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 export SEQ_TITLE_SAMPLE=10000
-# Defaults match run_minionerec_grpo.sh (not all listed explicitly in rl.sh)
-export ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-16}"
+# Defaults match original MiniOneRec max_completion_length.
+export ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-128}"
 export MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-256}"
 export MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-2560}"
 export MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"

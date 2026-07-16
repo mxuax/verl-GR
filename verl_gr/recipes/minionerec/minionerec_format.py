@@ -6,6 +6,7 @@ import random
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 
 def parse_maybe_list(value: Any) -> list[Any]:
@@ -85,5 +86,8 @@ def maybe_parse_description(description: Any) -> Any:
 def sample_records(records: list[dict[str, Any]], sample: int, *, seed: int | None = None) -> list[dict[str, Any]]:
     if sample <= 0 or sample >= len(records):
         return records
-    rng = random.Random(seed)
-    return rng.sample(records, sample)
+    # Original MiniOneRec CSVBaseDataset uses pandas.DataFrame.sample with
+    # random_state=seed, so keep the selected rows and their sampled order
+    # identical for RLSeqTitle2SidDataset parity.
+    sampled = pd.DataFrame(records).sample(n=sample, random_state=seed)
+    return sampled.to_dict(orient="records")

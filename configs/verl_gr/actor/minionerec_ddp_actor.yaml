@@ -10,16 +10,22 @@ ppo_max_token_len_per_gpu: 40960
 loss_agg_mode: seq-mean-token-mean
 use_kl_loss: true
 kl_loss_coef: 0.001
-kl_loss_type: low_var_kl
+kl_loss_type: minionerec_low_var_kl
 
 policy_loss:
   loss_mode: minionerec_reinforce
 
 engine_config:
   model_dtype: bf16
-  use_torch_compile: true
+  use_torch_compile: false
+  disable_flash_sdp: true
   seed: 42
   completion_only_logprob: true
+  # Fast training default: keep nested/rmpad transport and compute logprobs only
+  # for completion-token rows. Set MINIONEREC_FORCE_PADDED_LOGPROB=true in the
+  # launcher to restore the conservative MiniOneRec padded-forward parity path.
+  completion_only_force_padded: false
+  completion_only_drop_position_ids: true
 
 optim:
   optimizer: paged_adamw_32bit

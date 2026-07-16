@@ -43,7 +43,7 @@ export N_GPUS=4
 export AGENT_LOOP_NUM_WORKERS=4
 
 # Hyperparameters aligned with rl.sh
-export TRAIN_BATCH_SIZE=64
+export TRAIN_BATCH_SIZE=32
 export PPO_MICRO_BATCH_PER_GPU=2
 export TOTAL_EPOCHS=2
 export BEAM_WIDTH=16
@@ -51,7 +51,7 @@ export ROLLOUT_TEMPERATURE=1.0
 export LEARNING_RATE=1e-5
 export SEQ_TITLE_SAMPLE=10000
 # Defaults match run_minionerec_grpo.sh (not all listed explicitly in rl.sh)
-export ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-16}"
+export ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-128}"
 export MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-64}"
 export MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-2560}"
 export MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"

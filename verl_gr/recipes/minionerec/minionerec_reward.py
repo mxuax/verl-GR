@@ -61,8 +61,8 @@ class RewardPenaltyConfig:
 
     def __init__(
         self,
-        empty_completion: float = -1.0,
-        invalid_sid: float = -0.5,
+        empty_completion: float = 0.0,
+        invalid_sid: float = 0.0,
     ):
         self.empty_completion = empty_completion
         self.invalid_sid = invalid_sid

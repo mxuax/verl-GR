@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 import os
+import json
+from contextlib import nullcontext
 
 import torch
 import torch.distributed
@@ -19,11 +21,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import verl.utils.torch_functional as verl_F
 from verl.trainer.config import CheckpointConfig
+from verl.utils import tensordict_utils as tu
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.device import get_device_id, get_device_name
 from verl.workers.config import HFModelConfig, FSDPOptimizerConfig
 from verl.workers.engine.base import BaseEngine, BaseEngineCtx, EngineRegistry
 from verl.workers.engine.fsdp.transformer_impl import FSDPEngine, FSDPEngineWithLMHead
+from verl.workers.engine.utils import postprocess_batch_func, prepare_micro_batches
 from verl_gr.workers.optimizer import build_actor_optimizer
 
 logger = logging.getLogger(__file__)
@@ -179,6 +183,10 @@ class DDPEngine(FSDPEngine):
             from verl.workers.engine.utils import enable_full_determinism
             enable_full_determinism(seed=getattr(self.engine_config, "seed", 42))
 
+        if getattr(self.engine_config, "disable_flash_sdp", False) and torch.cuda.is_available():
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+
         from verl_gr.utils.lora_config import is_lora_enabled, trainable_parameters
 
         # DDP has no parameter/optimizer offloading
@@ -226,16 +234,19 @@ class DDPEngine(FSDPEngine):
 
     def _build_ddp_module(self, module: torch.nn.Module) -> torch.nn.Module:
         """Wrap the HF model with DistributedDataParallel."""
-        from verl.utils.activation_offload import enable_activation_offloading
-
         module = module.to(get_device_id())
 
         find_unused = getattr(self.engine_config, "ddp_find_unused_parameters", False)
         module = DDP(module, device_ids=[torch.cuda.current_device()], find_unused_parameters=find_unused)
 
-        # Apply activation offloading (if configured)
+        # verl activation offload only supports FSDP/FSDP2. Refuse silently here
+        # so a stale `enable_activation_offload=true` does not crash DDP init.
         if getattr(self.model_config, "enable_activation_offload", False):
-            enable_activation_offloading(module, "ddp")
+            print(
+                "[DDPEngine] enable_activation_offload=true is unsupported on DDP; "
+                "skipping activation offload (set model.enable_activation_offload=false).",
+                flush=True,
+            )
 
         return module
 
@@ -304,12 +315,191 @@ class DDPEngine(FSDPEngine):
         params = trainable_parameters(module) if self._is_lora else module.parameters()
         return build_actor_optimizer(params, self.optimizer_config)
 
+    def _debug_enabled(self) -> bool:
+        return bool(os.getenv("MINIONEREC_DEBUG_DUMP_DIR"))
+
+    def _debug_path(self) -> str:
+        dump_dir = os.getenv("MINIONEREC_DEBUG_DUMP_DIR", "")
+        os.makedirs(dump_dir, exist_ok=True)
+        return os.path.join(dump_dir, f"verl_ddp_rank{self.rank}.jsonl")
+
+    def _debug_write(self, payload: dict):
+        if not self._debug_enabled():
+            return
+        payload = {"rank": int(self.rank), **payload}
+        with open(self._debug_path(), "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    @staticmethod
+    def _debug_tensor_summary(value) -> dict | None:
+        if not isinstance(value, torch.Tensor):
+            return None
+        tensor = value.detach()
+        summary = {
+            "shape": list(tensor.shape),
+            "dtype": str(tensor.dtype),
+        }
+        if tensor.numel() > 0 and tensor.is_floating_point():
+            tf = tensor.float()
+            summary.update(
+                mean=float(tf.mean().item()),
+                std=float(tf.std(unbiased=False).item()) if tf.numel() > 1 else 0.0,
+                min=float(tf.min().item()),
+                max=float(tf.max().item()),
+            )
+        elif tensor.numel() > 0:
+            summary.update(
+                min=int(tensor.min().item()),
+                max=int(tensor.max().item()),
+                checksum=int(tensor.long().sum().item()),
+            )
+        return summary
+
+    def _debug_grad_norm(self) -> float:
+        total = torch.zeros((), device=get_device_name())
+        for param in self.module.parameters():
+            if param.grad is None:
+                continue
+            grad = param.grad.detach().float()
+            total = total + grad.norm(2).pow(2)
+        return float(total.sqrt().item())
+
+    def _debug_selected_params(self) -> list[tuple[str, torch.nn.Parameter]]:
+        substrings = os.getenv(
+            "MINIONEREC_DEBUG_PARAM_SUBSTR",
+            "layers.0.self_attn.q_proj.weight,layers.27.mlp.down_proj.weight",
+        ).split(",")
+        substrings = [item.strip() for item in substrings if item.strip()]
+        selected = []
+        for name, param in self.module.named_parameters():
+            if any(substr in name for substr in substrings):
+                selected.append((name, param))
+        return selected
+
+    def _debug_param_snapshot(self) -> dict[str, dict]:
+        snapshot = {}
+        for name, param in self._debug_selected_params():
+            data = param.detach()
+            entry = {
+                "dtype": str(data.dtype),
+                "shape": list(data.shape),
+                "norm": float(data.float().norm().item()),
+                "mean": float(data.float().mean().item()),
+            }
+            if param.grad is not None:
+                entry["grad_dtype"] = str(param.grad.dtype)
+                entry["grad_norm"] = float(param.grad.detach().float().norm().item())
+            snapshot[name] = entry
+        return snapshot
+
+    def forward_backward_batch(self, data, loss_function, forward_only=False):
+        if forward_only or not self._debug_enabled():
+            return super().forward_backward_batch(data, loss_function, forward_only=forward_only)
+
+        tu.assign_non_tensor(data, sp_size=self.ulysses_sequence_parallel_size)
+        batch_num_tokens = data["loss_mask"].sum().to(get_device_id())
+        torch.distributed.all_reduce(
+            batch_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
+        )
+        tu.assign_non_tensor(data, batch_num_tokens=batch_num_tokens.item())
+        tu.assign_non_tensor(data, dp_size=self.get_data_parallel_size())
+
+        micro_batches, indices = prepare_micro_batches(
+            data=data, dp_group=self.get_data_parallel_group(), same_micro_num_in_dp=True
+        )
+        self._debug_write(
+            {
+                "event": "forward_backward_start",
+                "num_micro_batches": len(micro_batches),
+                "batch_shape": list(data.shape),
+                "batch_num_tokens": float(batch_num_tokens.item()),
+                "dp_size": int(self.get_data_parallel_size()),
+                "global_batch_size": tu.get(data, "global_batch_size", default=None),
+                "batch_num_tokens_meta": tu.get(data, "batch_num_tokens", default=None),
+            }
+        )
+
+        output_lst = []
+        ctx = torch.no_grad() if forward_only else nullcontext()
+        for micro_idx, micro_batch in enumerate(micro_batches):
+            with ctx:
+                loss, meta_info = self.forward_step(micro_batch, loss_function=loss_function, forward_only=forward_only)
+                loss_value = float(loss.detach().float().item()) if isinstance(loss, torch.Tensor) else None
+                metrics = {}
+                if isinstance(meta_info, dict):
+                    metrics = meta_info.get("metrics", {})
+                self._debug_write(
+                    {
+                        "event": "micro_forward",
+                        "micro_idx": micro_idx,
+                        "micro_shape": list(micro_batch.shape),
+                        "loss": loss_value,
+                        "loss_mask": self._debug_tensor_summary(micro_batch.get("loss_mask", None)),
+                        "advantages": self._debug_tensor_summary(micro_batch.get("advantages", None)),
+                        "responses": self._debug_tensor_summary(micro_batch.get("responses", None)),
+                        "global_batch_size": tu.get(micro_batch, "global_batch_size", default=None),
+                        "batch_num_tokens": tu.get(micro_batch, "batch_num_tokens", default=None),
+                        "update_lr_scheduler": tu.get(micro_batch, "update_lr_scheduler", default=None),
+                        "metric_keys": sorted(list(metrics.keys()))[:32] if isinstance(metrics, dict) else [],
+                    }
+                )
+                if not forward_only:
+                    loss.backward()
+                    self._debug_write(
+                        {
+                            "event": "micro_backward",
+                            "micro_idx": micro_idx,
+                            "grad_norm_after_backward": self._debug_grad_norm(),
+                            "params": self._debug_param_snapshot(),
+                        }
+                    )
+            output_lst.append(meta_info)
+
+        return postprocess_batch_func(output_lst=output_lst, indices=indices, data=data)
+
     def optimizer_step(self):
         assert self.optimizer_config.clip_grad is not None
+
+        debug_enabled = self._debug_enabled()
+        before_params = {}
+        before_master_params = {}
+        if debug_enabled:
+            for name, param in self._debug_selected_params():
+                before_params[name] = param.detach().float().clone()
+                master_param_for_visible = getattr(self.optimizer, "master_param_for_visible", None)
+                if master_param_for_visible is not None:
+                    master = master_param_for_visible(param)
+                    if master is not None:
+                        before_master_params[name] = master.detach().float().clone()
+            self._debug_write(
+                {
+                    "event": "optimizer_pre_clip",
+                    "optimizer_class": type(self.optimizer).__name__,
+                    "optimizer_module": type(self.optimizer).__module__,
+                    "inner_optimizer_class": type(getattr(self.optimizer, "inner_optimizer", self.optimizer)).__name__,
+                    "inner_optimizer_module": type(getattr(self.optimizer, "inner_optimizer", self.optimizer)).__module__,
+                    "has_fp32_master": hasattr(self.optimizer, "master_params"),
+                    "lr": float(self.optimizer.param_groups[0]["lr"]) if self.optimizer.param_groups else None,
+                    "param_group_lrs": [float(group["lr"]) for group in self.optimizer.param_groups],
+                    "clip_grad": float(self.optimizer_config.clip_grad),
+                    "grad_norm_raw": self._debug_grad_norm(),
+                    "params": self._debug_param_snapshot(),
+                }
+            )
 
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.module.parameters(), max_norm=self.optimizer_config.clip_grad
         )
+
+        if debug_enabled:
+            self._debug_write(
+                {
+                    "event": "optimizer_post_clip",
+                    "grad_norm_returned_preclip": float(grad_norm.item()) if hasattr(grad_norm, "item") else float(grad_norm),
+                    "grad_norm_after_clip": self._debug_grad_norm(),
+                    "params": self._debug_param_snapshot(),
+                }
+            )
 
         if not torch.isfinite(grad_norm):
             print(f"WARN: grad_norm is not finite: {grad_norm}")
@@ -317,11 +507,100 @@ class DDPEngine(FSDPEngine):
         else:
             self.optimizer.step()
 
+        if debug_enabled:
+            deltas = {}
+            master_deltas = {}
+            for name, param in self._debug_selected_params():
+                if name not in before_params:
+                    continue
+                delta = param.detach().float() - before_params[name]
+                deltas[name] = {
+                    "max_abs": float(delta.abs().max().item()),
+                    "mean_abs": float(delta.abs().mean().item()),
+                    "norm": float(delta.norm().item()),
+                    "param_norm_after": float(param.detach().float().norm().item()),
+                    "param_dtype_after": str(param.dtype),
+                }
+                master_param_for_visible = getattr(self.optimizer, "master_param_for_visible", None)
+                if master_param_for_visible is not None and name in before_master_params:
+                    master = master_param_for_visible(param)
+                    if master is not None:
+                        master_delta = master.detach().float() - before_master_params[name]
+                        master_deltas[name] = {
+                            "max_abs": float(master_delta.abs().max().item()),
+                            "mean_abs": float(master_delta.abs().mean().item()),
+                            "norm": float(master_delta.norm().item()),
+                            "param_norm_after": float(master.detach().float().norm().item()),
+                            "param_dtype_after": str(master.dtype),
+                        }
+            opt_state = {}
+            for name, param in self._debug_selected_params()[:1]:
+                state_param = param
+                master_param_for_visible = getattr(self.optimizer, "master_param_for_visible", None)
+                if master_param_for_visible is not None:
+                    master_state_param = master_param_for_visible(param)
+                    state_param = master_state_param if master_state_param is not None else param
+                state = self.optimizer.state.get(state_param, {})
+                opt_state[name] = {
+                    key: str(value.dtype) if isinstance(value, torch.Tensor) else type(value).__name__
+                    for key, value in state.items()
+                }
+            self._debug_write(
+                {
+                    "event": "optimizer_post_step",
+                    "optimizer_class": type(self.optimizer).__name__,
+                    "optimizer_module": type(self.optimizer).__module__,
+                    "inner_optimizer_class": type(getattr(self.optimizer, "inner_optimizer", self.optimizer)).__name__,
+                    "inner_optimizer_module": type(getattr(self.optimizer, "inner_optimizer", self.optimizer)).__module__,
+                    "has_fp32_master": hasattr(self.optimizer, "master_params"),
+                    "grad_norm_returned_preclip": float(grad_norm.item()) if hasattr(grad_norm, "item") else float(grad_norm),
+                    "lr": float(self.optimizer.param_groups[0]["lr"]) if self.optimizer.param_groups else None,
+                    "param_group_lrs": [float(group["lr"]) for group in self.optimizer.param_groups],
+                    "deltas": deltas,
+                    "fp32_master_deltas": master_deltas,
+                    "optimizer_state": opt_state,
+                }
+            )
+
         if self._qat_enabled:
             from verl.utils.qat.core import invalidate_all_scales
             invalidate_all_scales(self.module)
 
         return grad_norm.item() if hasattr(grad_norm, "item") else grad_norm
+
+    def lr_scheduler_step(self):
+        """Advance scheduler and optionally dump LR before/after the step."""
+
+        debug_enabled = self._debug_enabled()
+        before_lrs = [float(group["lr"]) for group in self.optimizer.param_groups] if self.optimizer else []
+        before_scheduler_lrs = []
+        if self.lr_scheduler is not None:
+            try:
+                before_scheduler_lrs = [float(value) for value in self.lr_scheduler.get_last_lr()]
+            except Exception:
+                before_scheduler_lrs = []
+
+        lr = super().lr_scheduler_step()
+
+        if debug_enabled:
+            after_lrs = [float(group["lr"]) for group in self.optimizer.param_groups] if self.optimizer else []
+            after_scheduler_lrs = []
+            if self.lr_scheduler is not None:
+                try:
+                    after_scheduler_lrs = [float(value) for value in self.lr_scheduler.get_last_lr()]
+                except Exception:
+                    after_scheduler_lrs = []
+            self._debug_write(
+                {
+                    "event": "lr_scheduler_step",
+                    "before_param_group_lrs": before_lrs,
+                    "before_scheduler_lrs": before_scheduler_lrs,
+                    "returned_lr": float(lr) if lr is not None else None,
+                    "after_param_group_lrs": after_lrs,
+                    "after_scheduler_lrs": after_scheduler_lrs,
+                }
+            )
+        return lr
 
     # ------------------------------------------------------------------
     # Overrides — checkpoint

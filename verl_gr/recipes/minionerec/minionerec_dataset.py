@@ -133,7 +133,11 @@ class MiniOneRecDataset(Dataset):
         self.max_prompt_length = config.get("max_prompt_length", 1024)
         self.truncation = config.get("truncation", "error")
         self.filter_overlong_prompts = config.get("filter_overlong_prompts", True)
-        self.shuffle = config.get("shuffle", False)
+        # Original MiniOneRec first shuffles the constructed Dataset and then
+        # applies RepeatRandomSampler.  Keep ``dataset_shuffle`` as a diagnostic
+        # override, but default to the main data shuffle flag for framework
+        # parity.
+        self.shuffle = config.get("dataset_shuffle", config.get("shuffle", False))
         self.seed = config.get("seed", None)
         self.category = config.get("category", "Industrial_and_Scientific")
         self.category_text = CATEGORY_DESCRIPTIONS.get(self.category, self.category)
@@ -146,6 +150,7 @@ class MiniOneRecDataset(Dataset):
         self.sid_index_path = config.get("sid_index_path")
         self.item_meta_path = config.get("item_meta_path")
         self.seq_title_sample = int(config.get("seq_title_sample", 10000))
+        self.seq_title_sample_seed = config.get("seq_title_sample_seed", 0)
         self.num_workers = config.get("filter_overlong_prompts_workers", max(1, os.cpu_count() // 4))
         if self.num_workers is not None:
             self.num_workers = min(self.num_workers, os.cpu_count())
@@ -284,7 +289,7 @@ class MiniOneRecDataset(Dataset):
                     dedup=is_duplicate,
                 )
             )
-        return sample_records(records, self.seq_title_sample, seed=self.seed)
+        return sample_records(records, self.seq_title_sample, seed=self.seq_title_sample_seed)
 
     def maybe_filter_out_long_prompts(self, dataframe: datasets.Dataset) -> datasets.Dataset:
         tokenizer = self.tokenizer
@@ -336,11 +341,16 @@ class MiniOneRecDataset(Dataset):
         # MiniOneRec prompts are plain strings, while chat recipes use message lists.
         row["raw_prompt"] = raw_prompt
         row["raw_prompt_text"] = raw_prompt
-        row["index"] = (row.get("extra_info") or {}).get("index", index)
+        extra_info = row.get("extra_info") or {}
+        source_index = extra_info.get("index")
+        row["source_index"] = source_index if source_index is not None else -1
+        # GRPO advantage grouping must identify the constructed dataset row, not
+        # the source CSV row.  SidDataset and RLSeqTitle2SidDataset can share
+        # CSV indices, and alignment tasks may have no source index at all.
+        row["index"] = index
         row["tools_kwargs"] = {}
         row["interaction_kwargs"] = {}
-        if "uid" not in row:
-            row["uid"] = str(row["index"])
+        row["uid"] = str(index)
         return row
 
     def __getstate__(self) -> dict[str, Any]:

@@ -16,7 +16,10 @@ task:
 data:
   max_prompt_length: 2560
   prompt_key: prompt
-  shuffle: false
+  # Original MiniOneRec shuffles the constructed HF Dataset with seed=42 before
+  # applying RepeatRandomSampler.
+  shuffle: true
+  seed: 42
   max_response_length: 256
   filter_overlong_prompts: false
   truncation: left
@@ -29,6 +32,7 @@ data:
   sid_index_path: null
   item_meta_path: null
   seq_title_sample: 10000
+  seq_title_sample_seed: 0
   data_source_key: source
   reward_fn_key: source
 
@@ -66,7 +70,7 @@ actor_rollout_ref:
     loss_agg_mode: seq-mean-token-mean
     use_kl_loss: true
     kl_loss_coef: 0.001
-    kl_loss_type: low_var_kl
+    kl_loss_type: minionerec_low_var_kl
     policy_loss:
       loss_mode: minionerec_reinforce
     fsdp_config:

@@ -65,11 +65,16 @@ class HfConstrainedBeamGenerator:
     # ------------------------------------------------------------------
 
     def generate_train(
-        self, model: torch.nn.Module, prompts: list[str], *, prompt_token_ids: list[list[int]] | None = None
+        self,
+        model: torch.nn.Module,
+        prompts: list[str],
+        *,
+        prompt_token_ids: list[list[int]] | None = None,
+        calculate_log_probs: bool = False,
     ) -> list[HfBeamOutput]:
         """Training: constrained stochastic beam sampling (do_sample=True)."""
         return self._generate(model, prompts, beam_width=self._beam_width, do_sample=True,
-                              prompt_token_ids=prompt_token_ids)
+                              prompt_token_ids=prompt_token_ids, calculate_log_probs=calculate_log_probs)
 
     def generate_eval(
         self, model: torch.nn.Module, prompts: list[str], *, prompt_token_ids: list[list[int]] | None = None
@@ -85,6 +90,7 @@ class HfConstrainedBeamGenerator:
     def _generate(
         self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool,
         prompt_token_ids: list[list[int]] | None = None,
+        calculate_log_probs: bool = False,
     ) -> list[HfBeamOutput]:
         """Batched constrained beam generation — micro-batched to control VRAM."""
         if not prompts:
@@ -97,12 +103,13 @@ class HfConstrainedBeamGenerator:
             chunk = prompts[batch_start:batch_end]
             ids_chunk = prompt_token_ids[batch_start:batch_end] if prompt_token_ids else None
             outputs.extend(self._generate_chunk(model, chunk, beam_width=beam_width, do_sample=do_sample,
-                                                 prompt_token_ids=ids_chunk))
+                                                 prompt_token_ids=ids_chunk, calculate_log_probs=calculate_log_probs))
         return outputs
 
     def _generate_chunk(
         self, model: torch.nn.Module, prompts: list[str], *, beam_width: int, do_sample: bool,
         prompt_token_ids: list[list[int]] | None = None,
+        calculate_log_probs: bool = False,
     ) -> list[HfBeamOutput]:
         device = next(model.parameters()).device
 
@@ -143,6 +150,7 @@ class HfConstrainedBeamGenerator:
             temperature=self._temperature if do_sample else 1.0,
             top_k=None,
             top_p=None,
+            repetition_penalty=1.0,
             pad_token_id=self._pad_token_id,
             eos_token_id=self._eos_token_id,
         )
@@ -158,17 +166,26 @@ class HfConstrainedBeamGenerator:
                 attention_mask=attn_mask,
                 generation_config=gen_config,
                 logits_processor=logits_processor,
-                output_scores=False,
+                output_scores=calculate_log_probs,
                 return_dict_in_generate=True,
                 use_cache=True,
             )
 
         seqs = output.sequences
+        transition_scores = None
+        if calculate_log_probs and getattr(output, "scores", None) is not None:
+            transition_scores = model.compute_transition_scores(
+                output.sequences,
+                output.scores,
+                getattr(output, "beam_indices", None),
+                normalize_logits=True,
+            )
         padded_input_len = input_ids.shape[1]  # uniform after left-padding
         chunk_outputs: list[HfBeamOutput] = []
         for p_idx in range(n_prompts):
             prompt_len = int(prompt_lens[p_idx])
             completions: list[list[int]] = []
+            completion_logprobs: list[list[float]] = []
             for b_idx in range(beam_width):
                 seq_idx = p_idx * beam_width + b_idx
                 # Slice from the uniform padded length, NOT individual prompt_len.
@@ -187,6 +204,12 @@ class HfConstrainedBeamGenerator:
                 else:
                     clean_ids = gen_ids
                 completions.append(clean_ids)
+                if transition_scores is not None:
+                    completion_logprobs.append(
+                        transition_scores[seq_idx, : len(clean_ids)].detach().float().cpu().tolist()
+                    )
+                else:
+                    completion_logprobs.append([])
             decoded = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
             # Prompt tokens: slice from the RIGHT side of the padded input,
             # keeping only the actual prompt tokens (last prompt_len positions).
@@ -194,6 +217,7 @@ class HfConstrainedBeamGenerator:
             chunk_outputs.append(HfBeamOutput(
                 prompt_token_ids=input_ids[p_idx, prompt_start:padded_input_len].tolist(),
                 response_token_ids=completions,
+                response_logprobs=completion_logprobs,
                 decoded_completions=decoded,
                 beam_width=beam_width,
             ))
@@ -205,11 +229,12 @@ class HfConstrainedBeamGenerator:
 # ---------------------------------------------------------------------------
 
 class HfBeamOutput:
-    __slots__ = ("prompt_token_ids", "response_token_ids", "decoded_completions", "beam_width")
+    __slots__ = ("prompt_token_ids", "response_token_ids", "response_logprobs", "decoded_completions", "beam_width")
 
-    def __init__(self, prompt_token_ids, response_token_ids, decoded_completions, beam_width):
+    def __init__(self, prompt_token_ids, response_token_ids, response_logprobs, decoded_completions, beam_width):
         self.prompt_token_ids = prompt_token_ids
         self.response_token_ids = response_token_ids
+        self.response_logprobs = response_logprobs
         self.decoded_completions = decoded_completions
         self.beam_width = beam_width
 

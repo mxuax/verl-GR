@@ -4,9 +4,9 @@ Matches the original MiniOneRec ``compute_loss`` from the ReReTrainer:
   - ``exp(logp - logp.detach())`` instead of PPO's ``exp(logp - old_logp)``
   - No importance-ratio weighting → pure REINFORCE / score-function update
   - No PPO clipping
-  - KL is handled by verl's existing ``use_kl_loss`` mechanism (separate term,
-    identical gradient to original's embedded KL for ``seq-mean-token-mean``
-    aggregation).
+  - KL is handled by verl's existing ``use_kl_loss`` mechanism, but MiniOneRec
+    must use ``minionerec_low_var_kl`` so the KL gradient matches the original
+    unclamped objective before global gradient clipping.
 """
 
 from __future__ import annotations

@@ -58,23 +58,40 @@ ITEM_META_FILE="${ITEM_META_FILE:-${VERL_GR_ROOT}/../MiniOneRec/data/Amazon/inde
 CATEGORY="${CATEGORY:-Industrial_and_Scientific}"
 BASE_MODEL_DIRNAME="$(basename "${BASE_MODEL%/}")"
 
-# rl.sh: num_generations=16 -> beam width; temperature=1.0; train_batch_size=64; epochs=2; lr=1e-5
+# rl.sh: num_generations=16 -> beam width; temperature=1.0; train_batch_size=64
+# completion rows per process, gradient_accumulation_steps=2, epochs=2, lr=1e-5.
 BEAM_WIDTH="${BEAM_WIDTH:-16}"
+VAL_BEAM_WIDTH="${VAL_BEAM_WIDTH:-50}"
 ITEM_MAX_TOKENS="${ITEM_MAX_TOKENS:-128}"
 LOGPROBS_MULTIPLIER="${LOGPROBS_MULTIPLIER:-2}"
 CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS="${CONSTRAINED_BEAM_MAX_INFLIGHT_REQUESTS:-64}"
 ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-1.0}"
 LEARNING_RATE="${LEARNING_RATE:-1e-5}"
+ACTOR_OPTIMIZER="${ACTOR_OPTIMIZER:-paged_adamw_32bit}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
+KL_LOSS_TYPE="${KL_LOSS_TYPE:-minionerec_low_var_kl}"
 TOTAL_EPOCHS="${TOTAL_EPOCHS:-2}"
-PPO_MICRO_BATCH_PER_GPU="${PPO_MICRO_BATCH_PER_GPU:-2}"
+PPO_MICRO_BATCH_PER_GPU="${PPO_MICRO_BATCH_PER_GPU:-16}"
+ORIG_TRAIN_BATCH_COMPLETIONS_PER_GPU="${ORIG_TRAIN_BATCH_COMPLETIONS_PER_GPU:-64}"
+ORIG_GRAD_ACCUM_STEPS="${ORIG_GRAD_ACCUM_STEPS:-2}"
 AGENT_LOOP_NUM_WORKERS="${AGENT_LOOP_NUM_WORKERS:-${N_GPUS:-1}}"
-TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-64}"
+if [[ -z "${TRAIN_BATCH_SIZE:-}" ]]; then
+  _TOTAL_ORIG_COMPLETIONS=$((ORIG_TRAIN_BATCH_COMPLETIONS_PER_GPU * N_GPUS * N_NODES * ORIG_GRAD_ACCUM_STEPS))
+  if ((_TOTAL_ORIG_COMPLETIONS % BEAM_WIDTH != 0)); then
+    echo "ERROR: original completion batch ${_TOTAL_ORIG_COMPLETIONS} is not divisible by BEAM_WIDTH=${BEAM_WIDTH}" >&2
+    exit 1
+  fi
+  # verl-GR's data.train_batch_size is prompt groups per optimizer step.
+  # Original MiniOneRec's train_batch_size is completion rows per process.
+  TRAIN_BATCH_SIZE=$((_TOTAL_ORIG_COMPLETIONS / BEAM_WIDTH))
+fi
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-40960}"
 ROLLOUT_MAX_NUM_SEQS="${ROLLOUT_MAX_NUM_SEQS:-512}"
 ROLLOUT_MODE="${ROLLOUT_MODE:-async}"
 TEST_FREQ="${TEST_FREQ:-20}"
 VAL_LOG_GENERATIONS="${VAL_LOG_GENERATIONS:-8}"
+DATA_SHUFFLE="${DATA_SHUFFLE:-true}"
+DATA_SEED="${DATA_SEED:-42}"
 TASK_NAME="${TASK_NAME:-minionerec}"
 TASK_CLASS_PATH="${TASK_CLASS_PATH:-verl_gr.recipes.minionerec.minionerec_recipe.MiniOneRecTask}"
 REWARD_NUM_WORKERS="${REWARD_NUM_WORKERS:-1}"
@@ -82,6 +99,7 @@ CONFIG_NAME="${CONFIG_NAME:-minionerec/grpo_trainer_ddp}"
 DECODE_MODE_TRAIN="${DECODE_MODE_TRAIN:-hf_constrained_beam_sample}"
 DECODE_MODE_VAL="${DECODE_MODE_VAL:-hf_constrained_beam_eval}"
 DISABLE_CACHE_IN_TRAIN="${DISABLE_CACHE_IN_TRAIN:-true}"
+MINIONEREC_FORCE_PADDED_LOGPROB="${MINIONEREC_FORCE_PADDED_LOGPROB:-false}"
 
 FSDP_TRANSFORMER_LAYERS="${FSDP_TRANSFORMER_LAYERS:-Qwen2DecoderLayer}"
 
@@ -151,8 +169,10 @@ else
     "++actor_rollout_ref.actor.engine_config._target_=verl_gr.workers.config.ddp_engine.DDPEngineConfig"
     "++actor_rollout_ref.actor.engine_config.strategy=ddp"
     "++actor_rollout_ref.actor.engine_config.model_dtype=bf16"
-    "++actor_rollout_ref.actor.engine_config.use_torch_compile=true"
+    "++actor_rollout_ref.actor.engine_config.use_torch_compile=false"
+    "++actor_rollout_ref.actor.engine_config.disable_flash_sdp=true"
     "++actor_rollout_ref.actor.engine_config.seed=42"
+    "++actor_rollout_ref.actor.engine_config.completion_only_force_padded=${MINIONEREC_FORCE_PADDED_LOGPROB}"
     "++actor_rollout_ref.ref._target_=verl_gr.workers.config.ddp_engine.DDPActorConfig"
     "++actor_rollout_ref.ref.rollout_n=1"
     "++actor_rollout_ref.ref.strategy=ddp"
@@ -160,8 +180,10 @@ else
     "++actor_rollout_ref.ref.engine_config.strategy=ddp"
     "++actor_rollout_ref.ref.engine_config.forward_only=true"
     "++actor_rollout_ref.ref.engine_config.model_dtype=bf16"
-    "++actor_rollout_ref.ref.engine_config.use_torch_compile=true"
+    "++actor_rollout_ref.ref.engine_config.use_torch_compile=false"
+    "++actor_rollout_ref.ref.engine_config.disable_flash_sdp=true"
     "++actor_rollout_ref.ref.engine_config.seed=42"
+    "++actor_rollout_ref.ref.engine_config.completion_only_force_padded=${MINIONEREC_FORCE_PADDED_LOGPROB}"
   )
 fi
 
@@ -176,18 +198,25 @@ echo "Info: ${INFO_FILE}"
 echo "SID index: ${SID_INDEX_FILE}"
 echo "Item meta: ${ITEM_META_FILE}"
 echo "Beam width: ${BEAM_WIDTH} (rl.sh num_generations)"
+echo "Validation beam width: ${VAL_BEAM_WIDTH}"
 _NUM_GEN_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-1}"
 _EFFECTIVE_ROLLOUT_N=$((_NUM_GEN_PER_PROMPT * BEAM_WIDTH))
 _EFFECTIVE_PPO_MINI_BATCH=$((TRAIN_BATCH_SIZE * _EFFECTIVE_ROLLOUT_N))
+_TOTAL_ORIG_COMPLETIONS=$((ORIG_TRAIN_BATCH_COMPLETIONS_PER_GPU * N_GPUS * N_NODES * ORIG_GRAD_ACCUM_STEPS))
+echo "Original batch contract: ${ORIG_TRAIN_BATCH_COMPLETIONS_PER_GPU} completions/GPU x $((N_GPUS * N_NODES)) GPU(s) x GAS ${ORIG_GRAD_ACCUM_STEPS} = ${_TOTAL_ORIG_COMPLETIONS} completions/update"
 echo "Rollout mode: ${ROLLOUT_MODE} | Hydra ++rollout.n=1 -> effective rollout.n=${_EFFECTIVE_ROLLOUT_N} (expand_rollout_counts)"
 echo "Effective ppo_mini_batch_size: ${TRAIN_BATCH_SIZE} x ${_EFFECTIVE_ROLLOUT_N} = ${_EFFECTIVE_PPO_MINI_BATCH} (actor update chunk)"
 echo "Completions/step: ${TRAIN_BATCH_SIZE} prompts x ${BEAM_WIDTH} beam = $((TRAIN_BATCH_SIZE * BEAM_WIDTH))"
 echo "Decode mode (train/val): ${DECODE_MODE_TRAIN}/${DECODE_MODE_VAL}"
 echo "Train batch size: ${TRAIN_BATCH_SIZE} | epochs: ${TOTAL_EPOCHS} | lr: ${LEARNING_RATE}"
+echo "Actor optimizer: ${ACTOR_OPTIMIZER}"
+echo "Data shuffle: ${DATA_SHUFFLE} | seed: ${DATA_SEED}"
+echo "KL loss: type=${KL_LOSS_TYPE} coef=${KL_LOSS_COEF}"
+echo "Completion logprob forward: force_padded=${MINIONEREC_FORCE_PADDED_LOGPROB}"
 echo "Task: ${TASK_NAME} (${TASK_CLASS_PATH})"
 echo "Config: ${CONFIG_NAME} | backend: ${ENGINE_FAMILY}"
 echo "Reward workers: ${REWARD_NUM_WORKERS}"
-echo "PPO micro_batch/GPU: ${PPO_MICRO_BATCH_PER_GPU} (≈rl gradient_accum_steps 2)"
+echo "PPO micro_batch/GPU: ${PPO_MICRO_BATCH_PER_GPU} (actor/ref forward micro-batch rows)"
 if [[ "${ENGINE_FAMILY}" == "fsdp" ]]; then
   echo "FSDP wrap layer: ${FSDP_TRANSFORMER_LAYERS}"
 fi
@@ -220,7 +249,10 @@ echo "==================================="
   ++data.item_meta_path="${ITEM_META_FILE}" \
   ++data.include_alignment_tasks=true \
   ++data.include_alignment_tasks_for_val=false \
+  ++data.shuffle="${DATA_SHUFFLE}" \
+  ++data.seed="${DATA_SEED}" \
   ++data.seq_title_sample="${SEQ_TITLE_SAMPLE:-10000}" \
+  ++data.seq_title_sample_seed="${SEQ_TITLE_SAMPLE_SEED:-0}" \
   ++reward.custom_reward_function.name="compute_score" \
   ++reward.custom_reward_function.path="${MINIONEREC_REWARD_PATH}" \
   ++data.train_batch_size="${TRAIN_BATCH_SIZE}" \
@@ -229,6 +261,7 @@ echo "==================================="
   ++actor_rollout_ref.model._target_="verl.workers.config.HFModelConfig" \
   ++actor_rollout_ref.model.external_lib="verl_gr.workers.engine.ddp" \
   ++actor_rollout_ref.model.path="${BASE_MODEL}" \
+  ++actor_rollout_ref.model.override_config.attn_implementation=sdpa \
   ++actor_rollout_ref.rollout.name="constrained_beam" \
   ++actor_rollout_ref.rollout.mode="${ROLLOUT_MODE}" \
   ++actor_rollout_ref.rollout.n=1 \
@@ -236,10 +269,13 @@ echo "==================================="
   ++actor_rollout_ref.rollout.agent.num_workers="${AGENT_LOOP_NUM_WORKERS}" \
   ++actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_TOKENS_PER_GPU}" \
   ++actor_rollout_ref.rollout.max_num_seqs="${ROLLOUT_MAX_NUM_SEQS}" \
+  ++actor_rollout_ref.rollout.calculate_log_probs=true \
   ++actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   ++actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
   ++actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   ++actor_rollout_ref.actor.ppo_mini_batch_size="${TRAIN_BATCH_SIZE}" \
+  ++actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
+  ++actor_rollout_ref.actor.optim.optimizer="${ACTOR_OPTIMIZER}" \
   ++actor_rollout_ref.actor.optim.lr="${LEARNING_RATE}" \
   ++actor_rollout_ref.actor.policy_loss.loss_mode=minionerec_reinforce \
   ++actor_rollout_ref.actor.optim.lr_scheduler_type=cosine \
@@ -248,11 +284,13 @@ echo "==================================="
   ++actor_rollout_ref.actor.optim.weight_decay=0.0 \
   ++actor_rollout_ref.actor.use_kl_loss=True \
   ++actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
+  ++actor_rollout_ref.actor.kl_loss_type="${KL_LOSS_TYPE}" \
   ++actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
   ++actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${MAX_TOKENS_PER_GPU}" \
   ++actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_PER_GPU}" \
   ++trainer.total_epochs="${TOTAL_EPOCHS}" \
   ++actor_rollout_ref.rollout.custom.beam_width="${BEAM_WIDTH}" \
+  ++actor_rollout_ref.rollout.custom.val_beam_width="${VAL_BEAM_WIDTH}" \
   ++actor_rollout_ref.rollout.custom.decode_mode_train="${DECODE_MODE_TRAIN}" \
   ++actor_rollout_ref.rollout.custom.decode_mode_val="${DECODE_MODE_VAL}" \
   ++actor_rollout_ref.rollout.custom.disable_cache_in_train="${DISABLE_CACHE_IN_TRAIN}" \

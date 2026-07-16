@@ -21,6 +21,7 @@ from verl.trainer.main_ppo import (
 from verl.trainer.ppo.ray_trainer import Role
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.dataset.rl_dataset import collate_fn
+from verl_gr.core.config_compat import ensure_runtime_root_blocks
 from verl_gr.recipes.minionerec.minionerec_recipe import MiniOneRecTask
 from verl_gr.recipes.openonerec.onerec_recipe import OneRecTask
 from verl_gr.recipes.rankgrpo.rankgrpo_task import RankGRPOTask
@@ -227,6 +228,18 @@ def _build_main():
         auto_set_device(config)
         _inject_legacy_reward_placeholders(config)
         config = migrate_legacy_reward_impl(config)
+        ensure_runtime_root_blocks(config)
+        # Guard against `# @package _` burying recipe configs under config._ while
+        # ensure_runtime_root_blocks fills top-level actor.optim with AdamW stubs.
+        buried = OmegaConf.select(config, "_.actor_rollout_ref.actor.optim.optimizer")
+        top_optim = OmegaConf.select(config, "actor_rollout_ref.actor.optim.optimizer")
+        if buried is not None and str(buried) != str(top_optim):
+            raise RuntimeError(
+                "MiniOneRec config appears buried under config._ "
+                f"(buried optimizer={buried!r}, top-level optimizer={top_optim!r}). "
+                "Use `# @package _global_` in the Hydra trainer YAML so recipe defaults "
+                "compose at the root (see configs/verl_gr/minionerec/grpo_trainer_ddp.yaml)."
+            )
         base_run_ppo(config, task_runner_class=TaskRunner)
 
     @hydra.main(config_path=str(_CONFIG_ROOT), config_name="openonerec/grpo_trainer", version_base=None)

@@ -339,7 +339,7 @@ def ensure_runtime_root_blocks(config) -> None:
                         "ppo_kl_coef": 0.1,
                     },
                     "clip_ratio_c": 3.0,
-                    "loss_agg_mode": "token-mean",
+                    "loss_agg_mode": "seq-mean-token-mean",
                     "loss_scale_factor": None,
                     "entropy_coeff": 0,
                     "calculate_entropy": False,

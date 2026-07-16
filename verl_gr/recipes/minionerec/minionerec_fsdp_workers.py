@@ -131,6 +131,7 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         is_validate = bool(meta_info.get("validate", False))
         val_beam_width = int(meta_info.get("val_beam_width", beam_width))
         hf_micro_batch_size = int(meta_info.get("hf_micro_batch_size", 16))
+        calculate_log_probs = bool(meta_info.get("calculate_log_probs", False))
 
         cache_key = f"{info_file}|{beam_width}|{val_beam_width}|{max_new_tokens}|{temperature}|{hf_micro_batch_size}"
         gen = self._hf_cached_generators.get(cache_key)
@@ -162,7 +163,10 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         with param_ctx, torch.inference_mode():
             if do_sample and not is_validate:
                 outputs = gen.generate_train(
-                    actor_module, my_prompts, prompt_token_ids=my_prompt_ids if prompt_token_ids is not None else None
+                    actor_module,
+                    my_prompts,
+                    prompt_token_ids=my_prompt_ids if prompt_token_ids is not None else None,
+                    calculate_log_probs=calculate_log_probs,
                 )
             else:
                 outputs = gen.generate_eval(
@@ -172,10 +176,12 @@ class MiniOneRecActorRolloutRefWorker(RefSyncMixin, ActorRolloutRefWorker):
         actor_module.train()
 
         grouped_resp_ids = [out.response_token_ids for out in outputs]
+        grouped_logprobs = [out.response_logprobs for out in outputs]
         grouped_decoded = [out.decoded_completions for out in outputs]
 
         return {
             "prompt_indices": my_prompt_indices,
             "response_ids": grouped_resp_ids,
+            "response_logprobs": grouped_logprobs,
             "decoded_completions": grouped_decoded,
         }

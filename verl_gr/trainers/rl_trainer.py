@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any
 import torch
 import time
+from omegaconf import open_dict
 
 from verl import DataProto
 from verl.trainer.ppo import core_algos
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerBase, rename_dict
 from verl.trainer.ppo.ray_trainer import Role, ResourcePoolManager
 from verl.utils import tensordict_utils as tu
 from verl.utils.torch_functional import masked_mean
@@ -260,6 +261,7 @@ class RLTrainer(RayPPOTrainerBase):
         if tokenizer is None and len(args) >= 2:
             tokenizer = args[1]
         super().__init__(*args, **kwargs)
+        self._apply_actor_scheduler_total_steps_override()
         global _RANKGRPO_TOKENIZER
         _RANKGRPO_TOKENIZER = tokenizer
         if rankgrpo_enabled(self.config.algorithm):
@@ -271,6 +273,37 @@ class RLTrainer(RayPPOTrainerBase):
             import verl.trainer.ppo.ray_trainer as ray_trainer_mod
 
             ray_trainer_mod.compute_data_metrics = compute_openonerec_data_metrics
+
+    def _apply_actor_scheduler_total_steps_override(self) -> None:
+        """Allow short runs to keep the original LR schedule length.
+
+        Upstream verl uses ``trainer.total_training_steps`` for both early stop
+        and ``actor.optim.total_training_steps``. Alignment probes often need to
+        stop at step 165 while preserving the full original/H69 scheduler horizon.
+        """
+
+        actor_cfg = _cfg_get(_cfg_get(self.config, "actor_rollout_ref", None), "actor", None)
+        optim_cfg = _cfg_get(actor_cfg, "optim", None)
+        if optim_cfg is None:
+            return
+        override_steps = _cfg_get(
+            optim_cfg,
+            "scheduler_total_training_steps",
+            _cfg_get(optim_cfg, "lr_scheduler_total_training_steps", None),
+        )
+        override_steps = self._as_int(override_steps, default=-1)
+        if override_steps <= 0:
+            return
+        with open_dict(optim_cfg):
+            optim_cfg.total_training_steps = override_steps
+            for key in ("scheduler_total_training_steps", "lr_scheduler_total_training_steps"):
+                if key in optim_cfg:
+                    del optim_cfg[key]
+        print(
+            "[RLTrainer] actor scheduler total_training_steps override: "
+            f"{override_steps} (trainer stop remains {self.total_training_steps})",
+            flush=True,
+        )
 
     def init_workers(self):
         super().init_workers()
@@ -519,12 +552,36 @@ class RLTrainer(RayPPOTrainerBase):
                   flush=True)
             self._old_log_prob_bypass_logged = True
 
-        # For REINFORCE, return zero-filled tensors since old_log_probs are unused.
-        # response_mask determines the valid token positions.
+        # For rollout-bypass mode, keep the proximal anchor tied to the policy
+        # that actually generated the samples. This matches upstream verl's
+        # bypass_mode (`old_log_probs = rollout_log_probs`) and avoids an
+        # actor-side recompute with a numerically different forward path.
         if "response_mask" not in batch.batch:
             batch.batch["response_mask"] = compute_response_mask(batch)
         response_mask = batch.batch["response_mask"]
-        log_probs = torch.zeros_like(response_mask, dtype=torch.float32)
+        if "rollout_log_probs" in batch.batch:
+            log_probs = batch.batch["rollout_log_probs"].to(dtype=torch.float32)
+            if log_probs.shape != response_mask.shape:
+                raise RuntimeError(
+                    "rollout_log_probs shape mismatch: "
+                    f"{tuple(log_probs.shape)} vs response_mask {tuple(response_mask.shape)}"
+                )
+            if not getattr(self, "_old_log_prob_rollout_logged", False):
+                print(
+                    "[RLTrainer._compute_old_log_prob] using rollout_log_probs as old_log_probs "
+                    "for minionerec_reinforce.",
+                    flush=True,
+                )
+                self._old_log_prob_rollout_logged = True
+        else:
+            log_probs = torch.zeros_like(response_mask, dtype=torch.float32)
+            if not getattr(self, "_old_log_prob_zero_fallback_logged", False):
+                print(
+                    "[RLTrainer._compute_old_log_prob] rollout_log_probs missing; "
+                    "falling back to zero-filled old_log_probs.",
+                    flush=True,
+                )
+                self._old_log_prob_zero_fallback_logged = True
         entropy = torch.zeros_like(response_mask, dtype=torch.float32)
 
         old_log_prob_td = tu.get_tensordict({"old_log_probs": log_probs, "entropys": entropy})
@@ -533,11 +590,178 @@ class RLTrainer(RayPPOTrainerBase):
 
     def _update_actor(self, batch: DataProto) -> DataProto:
         with _nvtx_range("actor.forward_backward"):
-            actor_output = super()._update_actor(batch)
+            if self._uses_minionerec_reinforce_loss():
+                actor_output = self._update_minionerec_actor(batch)
+            else:
+                actor_output = super()._update_actor(batch)
         self._add_actor_lr_metrics(actor_output.meta_info["metrics"])
         if not batch.meta_info.get("validate", False):
             self._try_sync_ref_model()
         return actor_output
+
+    def _uses_minionerec_reinforce_loss(self) -> bool:
+        actor_cfg = self.config.actor_rollout_ref.actor
+        policy_loss = actor_cfg.get("policy_loss", {}) if hasattr(actor_cfg, "get") else {}
+        loss_mode = policy_loss.get("loss_mode", "") if hasattr(policy_loss, "get") else getattr(policy_loss, "loss_mode", "")
+        return str(loss_mode) == "minionerec_reinforce"
+
+    def _maybe_dump_minionerec_real_batch(self, tag: str, data: Any) -> None:
+        """Opt-in dump of the real rollout/update batch for cross-framework replay."""
+
+        dump_dir = os.getenv("MINIONEREC_REALBATCH_DUMP_DIR")
+        if not dump_dir:
+            return
+        max_dumps = int(os.getenv("MINIONEREC_REALBATCH_MAX_DUMPS", "1"))
+        count_attr = "_minionerec_realbatch_dump_count"
+        count = int(getattr(self, count_attr, 0))
+        if count >= max_dumps:
+            return
+
+        os.makedirs(dump_dir, exist_ok=True)
+        step = int(getattr(self, "global_steps", -1))
+        target_steps_raw = os.getenv("MINIONEREC_REALBATCH_DUMP_STEPS", "").strip()
+        if target_steps_raw:
+            target_steps = {
+                int(item.strip())
+                for item in target_steps_raw.split(",")
+                if item.strip()
+            }
+            if step not in target_steps:
+                return
+        payload: dict[str, Any] = {
+            "tag": tag,
+            "global_step": step,
+            "tensor": {},
+            "non_tensor": {},
+            "meta_info": {},
+        }
+
+        tensor_keys = {
+            "prompts",
+            "responses",
+            "input_ids",
+            "attention_mask",
+            "position_ids",
+            "response_mask",
+            "loss_mask",
+            "rollout_log_probs",
+            "old_log_probs",
+            "ref_log_prob",
+            "token_level_scores",
+            "token_level_rewards",
+            "advantages",
+            "returns",
+            "rm_scores",
+        }
+
+        def add_tensor(key: str, value: Any) -> None:
+            if isinstance(value, torch.Tensor):
+                payload["tensor"][key] = value.detach().cpu().clone()
+
+        if isinstance(data, DataProto):
+            for key in tensor_keys:
+                if key in data.batch:
+                    add_tensor(key, data.batch[key])
+            for key, value in data.non_tensor_batch.items():
+                if key in {
+                    "uid",
+                    "index",
+                    "raw_prompt",
+                    "raw_prompt_text",
+                    "reward_model",
+                    "source",
+                    "data_source",
+                    "minionerec_rule_reward",
+                    "minionerec_ranking_reward",
+                    "minionerec_shape_penalty",
+                    "minionerec_total_reward",
+                    "minionerec_invalid_sid",
+                    "minionerec_empty_completion",
+                }:
+                    payload["non_tensor"][key] = np.asarray(value, dtype=object).tolist()
+            payload["meta_info"] = dict(data.meta_info)
+        else:
+            for key in tensor_keys:
+                try:
+                    add_tensor(key, data.get(key))
+                except (AttributeError, KeyError, RuntimeError):
+                    pass
+            for key in (
+                "global_batch_size",
+                "mini_batch_size",
+                "epochs",
+                "seed",
+                "calculate_entropy",
+                "compute_loss",
+                "batch_num_tokens",
+                "dp_size",
+            ):
+                try:
+                    value = tu.get(data, key, default=None)
+                except (AttributeError, KeyError, RuntimeError):
+                    value = None
+                if value is not None:
+                    payload["meta_info"][key] = value
+
+        base = os.path.join(dump_dir, f"step{step:06d}_{tag}")
+        torch.save(payload, f"{base}.pt")
+        summary = {
+            "tag": tag,
+            "global_step": step,
+            "tensor": {
+                key: {
+                    "shape": list(value.shape),
+                    "dtype": str(value.dtype),
+                    "sum": float(value.float().sum().item()) if value.is_floating_point() else int(value.long().sum().item()),
+                }
+                for key, value in payload["tensor"].items()
+            },
+            "non_tensor_keys": sorted(payload["non_tensor"].keys()),
+            "meta_info": payload["meta_info"],
+        }
+        with open(f"{base}.json", "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2, sort_keys=True, default=str)
+        if tag == "post_padding":
+            setattr(self, count_attr, count + 1)
+
+    def _update_minionerec_actor(self, batch: DataProto) -> DataProto:
+        """Update actor once over the fully expanded MiniOneRec beam batch."""
+
+        self._maybe_dump_minionerec_real_batch("pre_padding", batch)
+        batch_td = batch.to_tensordict()
+        batch_td = left_right_2_no_padding(batch_td)
+        calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
+            self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
+        )
+        expanded_batch_size = int(batch_td.shape[0])
+        if not getattr(self, "_minionerec_full_batch_update_logged", False):
+            cfg_mini = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+            cfg_rollout_n = self.config.actor_rollout_ref.rollout.n
+            print(
+                "[MiniOneRec actor update] using expanded batch size for "
+                f"mini/global batch: {expanded_batch_size} "
+                f"(configured ppo_mini_batch_size={cfg_mini}, rollout.n={cfg_rollout_n})",
+                flush=True,
+            )
+            self._minionerec_full_batch_update_logged = True
+
+        tu.assign_non_tensor(
+            batch_td,
+            calculate_entropy=calculate_entropy,
+            global_batch_size=expanded_batch_size,
+            mini_batch_size=expanded_batch_size,
+            epochs=self.config.actor_rollout_ref.actor.ppo_epochs,
+            seed=self.config.actor_rollout_ref.actor.data_loader_seed,
+            dataloader_kwargs={"shuffle": self.config.actor_rollout_ref.actor.shuffle},
+            compute_loss=True,
+        )
+        self._maybe_dump_minionerec_real_batch("post_padding", batch_td)
+        actor_output = self.actor_rollout_wg.update_actor(batch_td)
+        actor_output = tu.get(actor_output, "metrics")
+        actor_output = rename_dict(actor_output, "actor/")
+        if "actor/mfu" in actor_output:
+            actor_output["perf/mfu/actor"] = actor_output.pop("actor/mfu")
+        return DataProto.from_single_dict(data={}, meta_info={"metrics": actor_output})
 
     def _compute_ref_log_prob(self, batch: DataProto) -> DataProto:
         with _nvtx_range("ref.forward"):
@@ -554,8 +778,8 @@ class RLTrainer(RayPPOTrainerBase):
         freq = int(freq)
         if freq <= 0 or self.global_steps % freq != 0:
             return
-        # TRL-style EMA mixup: ref = alpha * ref + (1-alpha) * actor
-        # alpha = 0 → hard copy (original behavior)
+        # TRL-style EMA mixup: ref = (1-alpha) * ref + alpha * actor.
+        # alpha = 1 → hard copy.
         alpha = float(_cfg_get(ref_cfg, "ref_model_mixup_alpha", 0.6))
         self.ref_policy_wg.sync_ref_weights(mixup_alpha=alpha)
 
@@ -575,7 +799,7 @@ class RLTrainer(RayPPOTrainerBase):
             batch_td,
             calculate_entropy=calculate_entropy,
             compute_loss=True,
-            global_batch_size=batch.batch.batch_size[0],
+            global_batch_size=batch_td.shape[0],
         )
         output = self.actor_rollout_wg.compute_log_prob(batch_td)
         return dict(tu.get(output, "metrics") or {})
